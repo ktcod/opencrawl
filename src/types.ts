@@ -106,6 +106,8 @@ export interface DocumentMetadata {
   contentType?: string;
   proxyUsed?: "basic" | "stealth";
   cacheState?: "hit" | "miss";
+  /** ISO time the cached snapshot was fetched (present on cache hits). */
+  cachedAt?: string;
   creditsUsed?: number;
   error?: string;
   /** opencrawl extension: true when a headless browser rendered the page. */

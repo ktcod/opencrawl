@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { JSDOM } from "jsdom";
-import { DEFAULT_TIMEOUT_MS } from "./config.js";
+import { DEFAULT_MAX_AGE_MS, DEFAULT_TIMEOUT_MS } from "./config.js";
 import { classifyContent, decodeText, fetchResource, type FetchFn, type FetchedResource } from "./fetcher.js";
 import { renderPage, type RenderFn, type RenderOptions } from "./browser.js";
 import {
@@ -18,6 +18,7 @@ import {
   serializeClean,
 } from "./html.js";
 import { extractPdf, isPdfBuffer } from "./pdf.js";
+import { getStore, type Store } from "./store.js";
 import { normalizeUrl } from "./urls.js";
 import type {
   AttributesFormat,
@@ -74,6 +75,18 @@ export function normalizeFormats(formats?: FormatOption[]): NormalizedFormats {
 export interface ScrapeDeps {
   fetch?: FetchFn;
   render?: RenderFn;
+  /** Store used for maxAge cache reads and writes. `false` disables both. */
+  store?: Store | false;
+}
+
+export interface ScrapeResult {
+  document: ScrapedDocument;
+  /** Row id in the store, or null when nothing was stored. */
+  storedId: number | null;
+  /** True when the document came from the cache instead of the network. */
+  cached: boolean;
+  /** When the content was fetched from the network (the snapshot time on a cache hit). */
+  fetchedAt: number;
 }
 
 export interface PageSource {
@@ -193,18 +206,46 @@ function documentFromText(res: FetchedResource, requested: string, nf: Normalize
   return finish(doc, warnings);
 }
 
+const CACHEABLE_FIELDS = ["markdown", "html", "rawHtml", "links", "images", "attributes"] as const;
+
 /**
- * Scrape one URL into a Document.
- *
- * Strategy: plain HTTP first (fast, no browser). A headless browser is used
- * when the caller asks for a screenshot or waitFor, forces render "always",
- * or when the fetched HTML looks like an empty JavaScript shell.
+ * Scrape one URL into a Document, consulting the store first when `maxAge`
+ * allows it and writing the fresh result back unless `storeInCache` is false.
+ * Screenshot requests always go to the network (screenshots are not stored).
  */
-export async function scrape(input: string, options: ScrapeOptions = {}, deps: ScrapeDeps = {}): Promise<ScrapedDocument> {
-  const fetchFn = deps.fetch ?? fetchResource;
-  const renderFn = deps.render ?? renderPage;
+export async function scrapeWithStore(input: string, options: ScrapeOptions = {}, deps: ScrapeDeps = {}): Promise<ScrapeResult> {
+  const store = deps.store === false ? null : (deps.store ?? getStore());
   const url = normalizeUrl(input);
   const nf = normalizeFormats(options.formats);
+  const maxAge = options.maxAge ?? DEFAULT_MAX_AGE_MS;
+  if (store && maxAge > 0 && !nf.types.has("screenshot")) {
+    const hit = store.getFreshDocument(url, maxAge, nf.types);
+    if (hit) {
+      const document: ScrapedDocument = { ...hit.document };
+      for (const field of CACHEABLE_FIELDS) if (!nf.types.has(field)) delete document[field];
+      document.metadata = { ...document.metadata, cacheState: "hit", cachedAt: new Date(hit.fetchedAt).toISOString() };
+      return { document, storedId: hit.id, cached: true, fetchedAt: hit.fetchedAt };
+    }
+  }
+  const fetchedAt = Date.now();
+  const document = await scrapeFresh(url, options, nf, deps);
+  const storedId = store && (options.storeInCache ?? true) ? store.putDocument(document, url, fetchedAt) : null;
+  return { document, storedId, cached: false, fetchedAt };
+}
+
+/** Scrape one URL into a Document (see scrapeWithStore). */
+export async function scrape(input: string, options: ScrapeOptions = {}, deps: ScrapeDeps = {}): Promise<ScrapedDocument> {
+  return (await scrapeWithStore(input, options, deps)).document;
+}
+
+/**
+ * Network path. Plain HTTP first (fast, no browser). A headless browser is
+ * used when the caller asks for a screenshot or waitFor, forces render
+ * "always", or when the fetched HTML looks like an empty JavaScript shell.
+ */
+async function scrapeFresh(url: string, options: ScrapeOptions, nf: NormalizedFormats, deps: ScrapeDeps): Promise<ScrapedDocument> {
+  const fetchFn = deps.fetch ?? fetchResource;
+  const renderFn = deps.render ?? renderPage;
   const warnings = nf.unsupported.map((f) => `format "${f}" needs an LLM and is not available in opencrawl`);
   if (options.actions && options.actions.length > 0) warnings.push("browser actions are not supported by opencrawl and were ignored");
   const timeoutMs = options.timeout ?? DEFAULT_TIMEOUT_MS;

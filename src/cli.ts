@@ -10,6 +10,8 @@ import { runStdioServer } from "./mcp.js";
 import { parseFile } from "./parse.js";
 import { scrape } from "./scrape.js";
 import { resolveBackend, search } from "./search.js";
+import { getStore } from "./store.js";
+import { watch } from "./watch.js";
 import type { FormatOption } from "./types.js";
 
 const HELP = `opencrawl ${VERSION} - local, keyless web scraper (MCP server, HTTP API, CLI)
@@ -18,10 +20,14 @@ Usage:
   opencrawl mcp                         Run the MCP server on stdio (tools: scrape, map, crawl, check_crawl_status, search, parse)
   opencrawl serve [--port 3002] [--host 127.0.0.1]
                                          Serve the v2-style HTTP API on http://127.0.0.1:3002
-  opencrawl scrape <url> [-f markdown,links] [--only-main-content | --no-main-content] [--wait-for ms] [--render auto|always|never] [--json] [-o file]
+  opencrawl scrape <url> [-f markdown,links] [--only-main-content | --no-main-content] [--wait-for ms] [--render auto|always|never] [--max-age ms] [--json] [-o file]
   opencrawl map <url> [--search q] [--limit n] [--sitemap include|skip|only] [--json] [-o file]
   opencrawl crawl <url> [--limit n] [--max-depth n] [--include-paths a,b] [--exclude-paths a,b] [--entire-domain] [-o file]
   opencrawl search <query> [--limit n] [--scrape] [--json] [-o file]
+  opencrawl search-local <query> [--limit n] [--site host] [--since iso] [--json]
+                                         Full-text search over everything already scraped (offline)
+  opencrawl watch <url> [--no-diff] [--json]   Re-scrape and report new | same | changed (+diff) | removed
+  opencrawl watch --list                 List watched URLs
   opencrawl parse <file> [-f markdown,links] [--json] [-o file]
   opencrawl doctor                      Check browser and search backend availability
 
@@ -31,6 +37,8 @@ Environment:
   BRAVE_SEARCH_API_KEY      Use Brave Search for search
   OPENCRAWL_API_KEY        Require this bearer token on the HTTP API
   OPENCRAWL_CRAWL_LIMIT    Default crawl page cap (100)
+  OPENCRAWL_DB              SQLite store path (default ~/.opencrawl/opencrawl.db)
+  OPENCRAWL_DEFAULT_MAX_AGE_MS  Cache window when a request sets no maxAge (0 = always fresh)
 `;
 
 /** Write to a file, or to stdout and wait for the pipe to drain (process.exit would truncate it). */
@@ -91,6 +99,7 @@ async function main(argv: string[]): Promise<number> {
           "only-main-content": { type: "boolean" },
           "no-main-content": { type: "boolean" },
           "wait-for": { type: "string" },
+          "max-age": { type: "string" },
           render: { type: "string" },
           json: { type: "boolean" },
           output: { type: "string", short: "o" },
@@ -105,6 +114,7 @@ async function main(argv: string[]): Promise<number> {
         formats,
         onlyMainContent: values["no-main-content"] ? false : values["only-main-content"] ? true : undefined,
         waitFor: values["wait-for"] ? Number(values["wait-for"]) : undefined,
+        maxAge: values["max-age"] ? Number(values["max-age"]) : undefined,
         render: values.render as "auto" | "always" | "never" | undefined,
         includeTags: list(values["include-tags"]),
         excludeTags: list(values["exclude-tags"]),
@@ -208,6 +218,46 @@ async function main(argv: string[]): Promise<number> {
       }
       return 0;
     }
+    case "search-local": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { limit: { type: "string" }, site: { type: "string" }, since: { type: "string" }, json: { type: "boolean" }, output: { type: "string", short: "o" } },
+      });
+      const query = positionals.join(" ").trim();
+      if (!query) throw new Error("search-local needs a query");
+      const hits = getStore().searchLocal(query, { limit: values.limit ? Number(values.limit) : undefined, site: values.site, since: values.since });
+      if (values.json) {
+        await emit(JSON.stringify({ success: true, data: hits }, null, 2), values.output);
+      } else {
+        const lines = hits.flatMap((h) => [h.title ?? "Untitled", `  URL: ${h.url}`, `  Fetched: ${h.fetchedAt}`, `  ${h.snippet}`, ""]);
+        await emit(lines.join("\n") || "No local results.", values.output);
+      }
+      return 0;
+    }
+    case "watch": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { list: { type: "boolean" }, "no-diff": { type: "boolean" }, json: { type: "boolean" }, output: { type: "string", short: "o" }, render: { type: "string" } },
+      });
+      if (values.list) {
+        const watches = getStore().listWatches();
+        const lines = watches.map((w) => `${w.url}\tchecks=${w.checkCount}\tlastChanged=${w.lastChangedAt ? new Date(w.lastChangedAt).toISOString() : "never"}`);
+        await emit(lines.join("\n") || "No watches yet.", values.output);
+        return 0;
+      }
+      const url = positionals[0];
+      if (!url) throw new Error("watch needs a URL (or --list)");
+      const result = await watch(url, { diff: !values["no-diff"], scrapeOptions: { render: values.render as "auto" | "always" | "never" | undefined } });
+      if (values.json) {
+        await emit(JSON.stringify(result, null, 2), values.output);
+      } else {
+        const head = `${result.status.toUpperCase()}  ${result.url}` + (result.error ? `  (${result.error})` : "") + (result.linesAdded !== undefined ? `  +${result.linesAdded} -${result.linesRemoved}` : "");
+        await emit(result.diff ? `${head}\n\n${result.diff}` : head, values.output);
+      }
+      return result.status === "error" ? 1 : 0;
+    }
     case "parse": {
       const { values, positionals } = parseArgs({
         args: rest,
@@ -233,6 +283,8 @@ async function main(argv: string[]): Promise<number> {
       } catch (err) {
         process.stdout.write(`search backend: error (${(err as Error).message})\n`);
       }
+      const store = getStore();
+      process.stdout.write(`store: ${store.path} (${store.countDocuments()} documents, ${store.listWatches().length} watches)\n`);
       return 0;
     }
     default:

@@ -6,13 +6,14 @@ import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { serve } from "@hono/node-server";
 import { getConnInfo } from "@hono/node-server/conninfo";
-import { MAX_CRAWL_CONCURRENCY, VERSION } from "./config.js";
+import { CRAWL_PAGE_SIZE, MAX_CRAWL_CONCURRENCY, VERSION } from "./config.js";
 import { activeCrawlCount, cancelCrawl, getCrawlErrors, getCrawlStatus, listActiveCrawls, startCrawl } from "./crawl.js";
 import { map } from "./map.js";
 import { PARSE_EXTENSIONS, parseFile } from "./parse.js";
 import { scrape } from "./scrape.js";
 import {
   crawlRequestSchema,
+  localSearchRequestSchema,
   mapRequestSchema,
   parseOptionsSchema,
   parseRequestSchema,
@@ -21,8 +22,11 @@ import {
   searchRequestSchema,
   validate,
   ValidationError,
+  watchRequestSchema,
 } from "./schemas.js";
 import { search } from "./search.js";
+import { getStore } from "./store.js";
+import { watch } from "./watch.js";
 import { InvalidUrlError, isLoopbackHost } from "./urls.js";
 
 class HttpError extends Error {
@@ -164,9 +168,14 @@ export function createApp(options: AppOptions = {}): Hono {
   app.get("/v2/crawl/active", (c) => c.json({ success: true, crawls: listActiveCrawls() }));
 
   app.get("/v2/crawl/:id", (c) => {
-    const job = getCrawlStatus(c.req.param("id"));
+    const id = c.req.param("id");
+    const skip = Math.max(0, Number.parseInt(c.req.query("skip") ?? "0", 10) || 0);
+    const limit = Math.max(1, Math.min(Number.parseInt(c.req.query("limit") ?? "", 10) || CRAWL_PAGE_SIZE, 10_000));
+    const job = getCrawlStatus(id, { skip, limit });
     if (!job) throw new HttpError(404, "Job not found");
-    return c.json({ success: true, ...job });
+    const { hasMore, ...rest } = job;
+    const next = hasMore ? `${new URL(c.req.url).origin}/v2/crawl/${id}?skip=${skip + limit}&limit=${limit}` : null;
+    return c.json({ success: true, ...rest, next });
   });
 
   app.get("/v2/crawl/:id/errors", (c) => {
@@ -184,6 +193,31 @@ export function createApp(options: AppOptions = {}): Hono {
     const { scrapeOptions, ...request } = validate(searchRequestSchema, await readJson(c));
     const result = await search({ ...request, scrapeOptions: scrapeOptions ? resolveScrapeOptions(scrapeOptions) : undefined });
     return c.json({ success: true, data: result.data, warning: result.warning, id: randomUUID(), creditsUsed: 0 });
+  });
+
+  app.post("/v2/watch", async (c) => {
+    const { url, scrapeOptions, diff } = validate(watchRequestSchema, await readJson(c));
+    const result = await watch(url, { diff, scrapeOptions: scrapeOptions ? resolveScrapeOptions(scrapeOptions) : undefined });
+    return c.json({ success: true, ...result });
+  });
+
+  app.get("/v2/watches", (c) =>
+    c.json({
+      success: true,
+      watches: getStore()
+        .listWatches()
+        .map((w) => ({
+          url: w.url,
+          checkCount: w.checkCount,
+          lastCheckedAt: w.lastCheckedAt ? new Date(w.lastCheckedAt).toISOString() : null,
+          lastChangedAt: w.lastChangedAt ? new Date(w.lastChangedAt).toISOString() : null,
+        })),
+    }),
+  );
+
+  app.post("/v2/local-search", async (c) => {
+    const { query, ...options } = validate(localSearchRequestSchema, await readJson(c));
+    return c.json({ success: true, data: getStore().searchLocal(query, options) });
   });
 
   app.post("/v2/parse", async (c) => {

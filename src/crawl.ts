@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import robotsParserImport from "robots-parser";
 import { DEFAULT_CRAWL_CONCURRENCY, DEFAULT_CRAWL_LIMIT, MAX_CRAWL_CONCURRENCY, ROBOTS_USER_AGENT } from "./config.js";
 import { fetchResource, type FetchFn } from "./fetcher.js";
-import { normalizeFormats, scrape, type ScrapeDeps } from "./scrape.js";
+import { normalizeFormats, scrapeWithStore, type ScrapeDeps } from "./scrape.js";
+import { getStore, type Store, type StoredJob } from "./store.js";
 import { discoverSitemapUrls, fetchSitemap, newSitemapBudget } from "./sitemap.js";
 import { dedupeKey, normalizeUrl, stripWww, toRegex } from "./urls.js";
 import type {
@@ -11,7 +12,6 @@ import type {
   CrawlOptions,
   CrawlStartResponse,
   CrawlStatus,
-  Document as ScrapedDocument,
   FormatOption,
   ScrapeOptions,
 } from "./types.js";
@@ -23,39 +23,21 @@ const robotsParser = robotsParserImport as unknown as RobotsFn;
 
 export type CrawlDeps = ScrapeDeps;
 
-interface JobState {
-  id: string;
-  url: string;
-  status: CrawlStatus;
-  total: number;
-  completed: number;
-  creditsUsed: number;
-  expiresAt: string;
-  createdAt: number;
-  options: CrawlOptions;
-  data: ScrapedDocument[];
-  errors: CrawlErrors["errors"];
-  robotsBlocked: string[];
+interface JobState extends StoredJob {
+  store: Store;
   cancelled: boolean;
   done: Promise<void>;
 }
 
 const JOB_TTL_MS = 24 * 60 * 60 * 1000;
+/** Jobs that are still running in this process. Finished jobs live only in the store. */
 const jobs = new Map<string, JobState>();
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** Drop finished jobs past their advertised expiresAt so memory does not grow forever. */
-export function evictExpiredJobs(now = Date.now()): number {
-  let evicted = 0;
-  for (const [id, job] of jobs) {
-    if (job.status !== "scraping" && Date.parse(job.expiresAt) <= now) {
-      jobs.delete(id);
-      evicted++;
-    }
-  }
-  return evicted;
+function resolveStore(deps: CrawlDeps): Store {
+  if (deps.store === false) throw new Error("crawl needs a store (deps.store cannot be false)");
+  return deps.store ?? getStore();
 }
-setInterval(() => evictExpiredJobs(), 10 * 60 * 1000).unref();
 
 interface Scope {
   allows(url: URL): boolean;
@@ -130,7 +112,8 @@ async function runCrawl(job: JobState, start: string, options: CrawlOptions, dep
   const robotsUa = options.robotsUserAgent ?? ROBOTS_USER_AGENT;
   let scope = buildScope(startUrl, options);
 
-  const scrapeOptions: ScrapeOptions = { ...(options.scrapeOptions ?? {}) };
+  // The crawler stores each page itself (after dropping the links it added for discovery).
+  const scrapeOptions: ScrapeOptions = { ...(options.scrapeOptions ?? {}), storeInCache: false };
   const wantsLinks = normalizeFormats(scrapeOptions.formats).types.has("links");
   const baseFormats: FormatOption[] = scrapeOptions.formats?.length ? scrapeOptions.formats : ["markdown"];
   scrapeOptions.formats = wantsLinks ? baseFormats : [...baseFormats, "links"];
@@ -188,11 +171,12 @@ async function runCrawl(job: JobState, start: string, options: CrawlOptions, dep
             continue;
           }
         }
-        const doc = await scrape(item.url, scrapeOptions, deps);
+        const { document: doc, fetchedAt } = await scrapeWithStore(item.url, scrapeOptions, { ...deps, store: job.store });
         if (job.cancelled) return;
         const status = doc.metadata?.statusCode ?? 200;
         if (status >= 400) {
           job.errors.push({ id: randomUUID(), url: item.url, error: `HTTP ${status}`, timestamp: new Date().toISOString() });
+          job.store.updateJob(job);
           continue;
         }
         if (item.depth === 0 && doc.metadata?.url) {
@@ -202,14 +186,16 @@ async function runCrawl(job: JobState, start: string, options: CrawlOptions, dep
         }
         const discovered = doc.links ?? [];
         if (!wantsLinks) delete doc.links;
-        job.data.push(doc);
+        job.store.appendJobDocument(job.id, job.store.putDocument(doc, item.url, fetchedAt));
         job.completed++;
         job.creditsUsed = job.completed;
+        job.store.updateJob(job);
         if (sitemapMode !== "only" && item.depth < maxDepth) {
           for (const link of discovered) enqueue(link, item.depth + 1);
         }
       } catch (err) {
         job.errors.push({ id: randomUUID(), url: item.url, error: (err as Error).message, timestamp: new Date().toISOString() });
+        job.store.updateJob(job);
       } finally {
         inflight--;
       }
@@ -220,12 +206,14 @@ async function runCrawl(job: JobState, start: string, options: CrawlOptions, dep
   await Promise.all(Array.from({ length: concurrency }, worker));
   job.total = job.completed + job.errors.length;
   job.status = job.cancelled ? "cancelled" : "completed";
+  job.store.updateJob(job);
 }
 
 /** Start a crawl in the background and return its job id (mirrors POST /v2/crawl). */
 export function startCrawl(input: string, options: CrawlOptions = {}, deps: CrawlDeps = {}): CrawlStartResponse {
   const url = normalizeUrl(input);
   const id = randomUUID();
+  const store = resolveStore(deps);
   const job: JobState = {
     id,
     url,
@@ -236,23 +224,54 @@ export function startCrawl(input: string, options: CrawlOptions = {}, deps: Craw
     expiresAt: new Date(Date.now() + JOB_TTL_MS).toISOString(),
     createdAt: Date.now(),
     options,
-    data: [],
     errors: [],
     robotsBlocked: [],
+    store,
     cancelled: false,
     done: Promise.resolve(),
   };
+  store.insertJob(job);
   jobs.set(id, job);
-  job.done = runCrawl(job, url, options, deps).catch((err: Error) => {
-    job.status = "failed";
-    job.errors.push({ id: randomUUID(), url, error: err.message, timestamp: new Date().toISOString() });
-  });
+  job.done = runCrawl(job, url, options, deps)
+    .catch((err: Error) => {
+      job.status = "failed";
+      job.errors.push({ id: randomUUID(), url, error: err.message, timestamp: new Date().toISOString() });
+      store.updateJob(job);
+    })
+    .finally(() => {
+      jobs.delete(id);
+    });
   return { id, url };
 }
 
-export function getCrawlStatus(id: string): CrawlJob | undefined {
-  const job = jobs.get(id);
-  if (!job) return undefined;
+export interface CrawlPage {
+  /** Documents to skip (pagination offset). */
+  skip?: number;
+  /** Documents to return; defaults to all remaining. */
+  limit?: number;
+}
+
+function findJob(id: string, deps: CrawlDeps = {}): { job: StoredJob; store: Store } | undefined {
+  const active = jobs.get(id);
+  if (active) return { job: active, store: active.store };
+  const store = deps.store === false ? null : (deps.store ?? getStore());
+  const stored = store?.getJob(id);
+  return stored && store ? { job: stored, store } : undefined;
+}
+
+/**
+ * Status and (a page of) documents for a crawl, from memory while it runs
+ * and from the store afterwards, including after a process restart.
+ * `hasMore` tells HTTP callers whether to offer a `next` link.
+ */
+export function getCrawlStatus(id: string, page: CrawlPage = {}, deps: CrawlDeps = {}): (CrawlJob & { hasMore: boolean }) | undefined {
+  const found = findJob(id, deps);
+  if (!found) return undefined;
+  const { job, store } = found;
+  const skip = Math.max(0, page.skip ?? 0);
+  const limit = Math.max(1, page.limit ?? Number.MAX_SAFE_INTEGER);
+  const data = store.getJobDocuments(id, skip, limit);
+  const hasMore = page.limit !== undefined && skip + data.length < store.countJobDocuments(id);
   return {
     id: job.id,
     status: job.status,
@@ -261,28 +280,30 @@ export function getCrawlStatus(id: string): CrawlJob | undefined {
     creditsUsed: job.creditsUsed,
     expiresAt: job.expiresAt,
     next: null,
-    data: [...job.data],
+    data,
+    hasMore,
   };
 }
 
-export function getCrawlErrors(id: string): CrawlErrors | undefined {
-  const job = jobs.get(id);
-  if (!job) return undefined;
-  return { errors: [...job.errors], robotsBlocked: [...job.robotsBlocked] };
+export function getCrawlErrors(id: string, deps: CrawlDeps = {}): CrawlErrors | undefined {
+  const found = findJob(id, deps);
+  if (!found) return undefined;
+  return { errors: [...found.job.errors], robotsBlocked: [...found.job.robotsBlocked] };
 }
 
-export function cancelCrawl(id: string): boolean {
-  const job = jobs.get(id);
-  if (!job) return false;
-  if (job.status === "scraping") {
-    job.cancelled = true;
-    job.status = "cancelled";
+export function cancelCrawl(id: string, deps: CrawlDeps = {}): boolean {
+  const active = jobs.get(id);
+  if (active) {
+    active.cancelled = true;
+    active.status = "cancelled";
+    active.store.updateJob(active);
+    return true;
   }
-  return true;
+  return findJob(id, deps) !== undefined;
 }
 
 export function listActiveCrawls(): Array<{ id: string; url: string; options: CrawlOptions }> {
-  return [...jobs.values()].filter((j) => j.status === "scraping").map((j) => ({ id: j.id, url: j.url, options: j.options }));
+  return [...jobs.values()].map((j) => ({ id: j.id, url: j.url, options: j.options }));
 }
 
 export function activeCrawlCount(): number {
@@ -294,9 +315,13 @@ export interface WaitOptions {
 }
 
 /** Resolve once the crawl reaches a terminal state (or the timeout elapses). */
-export async function waitForCrawl(id: string, options: WaitOptions = {}): Promise<CrawlJob> {
+export async function waitForCrawl(id: string, options: WaitOptions = {}, deps: CrawlDeps = {}): Promise<CrawlJob> {
   const job = jobs.get(id);
-  if (!job) throw new Error(`Crawl job not found: ${id}`);
+  if (!job) {
+    const stored = getCrawlStatus(id, {}, deps);
+    if (!stored) throw new Error(`Crawl job not found: ${id}`);
+    return stored;
+  }
   if (options.timeoutMs && options.timeoutMs > 0) {
     let timer: NodeJS.Timeout | undefined;
     await Promise.race([
@@ -309,7 +334,7 @@ export async function waitForCrawl(id: string, options: WaitOptions = {}): Promi
   } else {
     await job.done;
   }
-  return getCrawlStatus(id)!;
+  return getCrawlStatus(id, {}, deps)!;
 }
 
 /** Start a crawl and wait for it to finish (mirrors the SDK's crawl()). */
@@ -320,5 +345,5 @@ export async function crawl(
 ): Promise<CrawlJob> {
   const { timeoutMs, ...crawlOptions } = options;
   const { id } = startCrawl(input, crawlOptions, deps);
-  return waitForCrawl(id, { timeoutMs });
+  return waitForCrawl(id, { timeoutMs }, deps);
 }

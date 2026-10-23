@@ -135,6 +135,19 @@ export const parseOptionsSchema = z.object({
 });
 export const parseRequestSchema = z.object({ filePath: z.string().min(1).max(4096), ...parseOptionsSchema.shape });
 
+export const watchRequestSchema = z.object({
+  url: z.string().min(1).max(8192),
+  diff: z.boolean().optional(),
+  scrapeOptions: scrapeOptionsSchema.optional(),
+});
+
+export const localSearchRequestSchema = z.object({
+  query: z.string().min(1).max(500),
+  limit: z.number().int().min(1).max(100).optional(),
+  site: z.string().max(253).optional(),
+  since: z.union([z.string().max(40), z.number()]).optional(),
+});
+
 export class ValidationError extends Error {}
 
 export function validate<T>(schema: z.ZodType<T>, input: unknown): T {

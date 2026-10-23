@@ -1,6 +1,6 @@
 {
   "name": "opencrawl",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local, keyless web scraper: MCP server, v2-style HTTP API, CLI and library. Scrape, map, crawl, search and parse without an account or credits.",
   "license": "MIT",
   "type": "module",
@@ -14,7 +14,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -25,18 +25,23 @@
     "prepublishOnly": "npm run build"
   },
   "keywords": [
-    "scraper",
+    "cache",
+    "change-detection",
     "crawler",
-    "mcp",
+    "full-text-search",
     "markdown",
+    "mcp",
+    "open-source",
     "playwright",
+    "scraper",
     "self-hosted",
-    "open-source"
+    "sqlite"
   ],
   "dependencies": {
     "@hono/node-server": "^2.1.5",
     "@joplin/turndown-plugin-gfm": "^1.0.68",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "diff": "^9.0.0",
     "fast-xml-parser": "^5.11.2",
     "hono": "^4.13.13",
     "jsdom": "^30.1.3",

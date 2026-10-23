@@ -89,3 +89,43 @@ describe("v2 HTTP API", () => {
     expect(ok.status).toBe(200);
   });
 });
+
+describe("store-backed endpoints", () => {
+  const app = createApp();
+
+  it("paginates crawl status with a next link", async () => {
+    const start = await post(app, "/v2/crawl", { url: `${site.base}/docs/`, sitemap: "skip", scrapeOptions: { render: "never" } });
+    const { id } = await start.json();
+    let status;
+    for (let i = 0; i < 100; i++) {
+      status = await (await app.request(`/v2/crawl/${id}?limit=2`)).json();
+      if (status.status !== "scraping") break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(status.data).toHaveLength(2);
+    expect(status.next).toMatch(new RegExp(`/v2/crawl/${id}\\?skip=2&limit=2$`));
+    const page2 = await (await app.request(new URL(status.next).pathname + new URL(status.next).search)).json();
+    expect(page2.data).toHaveLength(2);
+    const page3 = await (await app.request(`/v2/crawl/${id}?skip=4&limit=2`)).json();
+    expect(page3.data).toHaveLength(1);
+    expect(page3.next).toBeNull();
+    const all = await (await app.request(`/v2/crawl/${id}`)).json();
+    expect(all.data).toHaveLength(5);
+    expect(all.next).toBeNull();
+  });
+
+  it("watches a page and searches the local store", async () => {
+    const first = await (await post(app, "/v2/watch", { url: `${site.base}/mutable`, scrapeOptions: { render: "never" } })).json();
+    expect(first).toMatchObject({ success: true, status: "new" });
+    site.mutable.body = "<main><h1>Mutable</h1><p>http edition</p></main>";
+    const second = await (await post(app, "/v2/watch", { url: `${site.base}/mutable`, scrapeOptions: { render: "never" } })).json();
+    expect(second).toMatchObject({ success: true, status: "changed" });
+    expect(second.diff).toContain("+http edition");
+    const list = await (await app.request("/v2/watches")).json();
+    expect(list.watches.map((w: { url: string }) => w.url)).toContain(`${site.base}/mutable`);
+    const found = await (await post(app, "/v2/local-search", { query: "edition", limit: 5 })).json();
+    expect(found.success).toBe(true);
+    expect(found.data[0].url).toBe(`${site.base}/mutable`);
+    expect((await post(app, "/v2/local-search", { query: "" })).status).toBe(400);
+  });
+});

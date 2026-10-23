@@ -39,4 +39,13 @@ export const MAX_SITEMAP_FETCHES = Number(process.env.OPENCRAWL_MAX_SITEMAP_FETC
 /** Browser pages open at once across all scrapes in this process. */
 export const MAX_BROWSER_CONTEXTS = Number(process.env.OPENCRAWL_MAX_BROWSER_CONTEXTS ?? 4);
 
-export const VERSION = "0.1.0";
+/** Cache window applied when a request does not set maxAge. 0 means always fetch fresh. */
+export const DEFAULT_MAX_AGE_MS = Number(process.env.OPENCRAWL_DEFAULT_MAX_AGE_MS ?? 0);
+
+/** Crawl status pages this many documents at a time over HTTP. */
+export const CRAWL_PAGE_SIZE = Number(process.env.OPENCRAWL_CRAWL_PAGE_SIZE ?? 200);
+
+/** Finished crawl jobs are kept in the store this long. */
+export const JOB_RETENTION_MS = Number(process.env.OPENCRAWL_JOB_RETENTION_DAYS ?? 7) * 24 * 60 * 60 * 1000;
+
+export const VERSION = "0.2.0";

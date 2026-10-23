@@ -31,6 +31,8 @@ describe("MCP server", () => {
       "parse",
       "scrape",
       "search",
+      "search_local",
+      "watch",
     ]);
   });
 
@@ -57,6 +59,15 @@ describe("MCP server", () => {
     expect(crawled.data).toHaveLength(2);
     const status = JSON.parse(textOf(await client.callTool({ name: "check_crawl_status", arguments: { id: crawled.id } })));
     expect(status.completed).toBe(2);
+  });
+
+  it("watch and search_local work through MCP", async () => {
+    const first = JSON.parse(textOf(await client.callTool({ name: "watch", arguments: { url: `${site.base}/docs/deep/d`, render: "never" } })));
+    expect(first.status).toBe("new");
+    const again = JSON.parse(textOf(await client.callTool({ name: "watch", arguments: { url: `${site.base}/docs/deep/d`, render: "never" } })));
+    expect(again.status).toBe("same");
+    const hits = JSON.parse(textOf(await client.callTool({ name: "search_local", arguments: { query: "Delta" } })));
+    expect(hits.data[0].url).toBe(`${site.base}/docs/deep/d`);
   });
 
   it("reports tool errors with isError", async () => {

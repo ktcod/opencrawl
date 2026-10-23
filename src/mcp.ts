@@ -8,6 +8,8 @@ import { parseFile } from "./parse.js";
 import { crawlOptionShape, resolveScrapeOptions, scrapeOptionShape, scrapeOptionsSchema } from "./schemas.js";
 import { scrape } from "./scrape.js";
 import { search } from "./search.js";
+import { getStore } from "./store.js";
+import { watch } from "./watch.js";
 import type { Document as ScrapedDocument } from "./types.js";
 
 function text(value: string) {
@@ -143,6 +145,53 @@ export function createMcpServer(): McpServer {
       try {
         const result = await search({ ...request, scrapeOptions: scrapeOptions ? resolveScrapeOptions(scrapeOptions) : undefined });
         return json({ success: true, ...result });
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    `${prefix}search_local`,
+    {
+      title: "Search previously scraped pages",
+      description:
+        "Full-text search over every page this opencrawl store has scraped or crawled (titles and markdown). Works offline. Returns one hit per URL with a snippet and when it was fetched. Use `site` to restrict to a host and `since` (ISO date) to restrict by fetch time.",
+      inputSchema: {
+        query: z.string().min(1),
+        limit: z.number().int().min(1).max(100).optional(),
+        site: z.string().optional(),
+        since: z.string().optional(),
+      },
+    },
+    async ({ query, ...options }) => {
+      try {
+        return json({ success: true, data: getStore().searchLocal(query, options) });
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    `${prefix}watch`,
+    {
+      title: "Check a page for changes",
+      description:
+        "Re-scrape a URL and compare it with the last snapshot in the store. Returns status new (first check), same, changed (with a unified diff of the markdown and line counts), removed (404/410 after a baseline) or error. Call it again later to see what changed since.",
+      inputSchema: {
+        url: z.string().min(1),
+        diff: z.boolean().optional(),
+        onlyMainContent: z.boolean().optional(),
+        includeTags: z.array(z.string()).optional(),
+        excludeTags: z.array(z.string()).optional(),
+        waitFor: z.number().min(0).max(60_000).optional(),
+        render: z.enum(["auto", "always", "never"]).optional(),
+      },
+    },
+    async ({ url, diff, ...scrapeOptions }) => {
+      try {
+        return json(await watch(url, { diff, scrapeOptions }));
       } catch (err) {
         return failure(err);
       }

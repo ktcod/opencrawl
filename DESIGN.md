@@ -26,6 +26,9 @@ What opencrawl chooses and why, and what it knowingly leaves out. Written 2026-1
 | Search | Pluggable backend: DuckDuckGo HTML (keyless default), SearXNG, Brave. `includeDomains` becomes `site:` operators and the backend is over-fetched before domain filtering | Keyless by default, self-hostable when it matters |
 | LLM formats | `json`, `summary`, `query`, `changeTracking`, `branding` return a `warning` and still deliver markdown | Honest degradation beats a hard error inside a crawl |
 | HTTP security | Loopback bind by default; refuse a non-loopback bind without a key; constant-time bearer check; `Host` allowlist (DNS rebinding); any unlisted `Origin` refused; JSON content type required; body limits; uploads written under a server-chosen name with a vetted extension and deleted after parsing; raw `filePath` only from loopback | A scraper reachable from a browser tab is a request forgery target |
+| Store | One SQLite file through Node's built-in `node:sqlite` (no native module). Documents are append-only snapshots keyed by a normalized URL; FTS5 indexes title and markdown; crawl jobs and their page order live in tables; watches keep a pointer to the last compared snapshot | Zero services, one file to back up or delete; snapshots make both the cache and change tracking trivial |
+| Cache | `maxAge` returns the newest successful snapshot within the window that carries every requested format; screenshots never hit the cache; default window 0 | Explicit opt-in staleness; a cached answer missing a requested format would be a silent lie |
+| Change tracking | `watch` compares SHA-256 of the markdown (html as fallback) and emits a unified diff; `removed` needs a prior baseline and a 404/410 | Hashing markdown ignores markup churn that does not change what a reader sees |
 | Input bounds | 50 MB response cap, gzip output cap, 50 sitemap fetches per job, validated request bodies with clamped numbers | Hostile sites and bad clients should cost bounded memory and time |
 
 ## Not supported
@@ -36,7 +39,9 @@ webhooks, batch endpoints, OCR, and any format that needs a language model.
 ## Known gaps
 
 - `total` on a crawl job is the number of pages attempted (successes plus HTTP errors).
-- No pagination on crawl status (`next` is always `null`); a huge crawl is returned whole.
+- The library's `crawl()` returns a job whole; HTTP pages it with `skip`/`limit` and a `next` link.
+- Document snapshots are never pruned, so the store grows with use; delete the file or add your own retention.
+- `search_local` ranks across all snapshots and then keeps one hit per URL, so an old snapshot can outrank the current one.
 - PDF extraction is text-layer only; scanned PDFs yield nothing.
 - DuckDuckGo's HTML endpoint rate-limits sustained use; use SearXNG or Brave for that.
 - A `delay` forces one worker; `Crawl-delay` in robots.txt is ignored.

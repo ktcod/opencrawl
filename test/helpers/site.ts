@@ -1,9 +1,16 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
+export interface MutableState {
+  status: number;
+  body: string;
+}
+
 export interface FixtureSite {
   base: string;
   requests: string[];
+  /** Controls the /mutable page: change body or status between requests. */
+  mutable: MutableState;
   close(): Promise<void>;
 }
 
@@ -106,10 +113,16 @@ function routes(base: string): Record<string, Route> {
 
 export async function startFixtureSite(): Promise<FixtureSite> {
   const requests: string[] = [];
+  const mutable: MutableState = { status: 200, body: "<main><h1>Mutable</h1><p>version one</p><p>stable line</p></main>" };
   let base = "";
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", base || "http://127.0.0.1");
     requests.push(url.pathname + url.search);
+    if (url.pathname === "/mutable") {
+      res.writeHead(mutable.status, { "content-type": "text/html; charset=utf-8" });
+      res.end(page("Mutable", mutable.body));
+      return;
+    }
     if (url.pathname === "/redirect") {
       res.writeHead(302, { location: url.searchParams.get("to") ?? "/" });
       res.end();
@@ -129,6 +142,7 @@ export async function startFixtureSite(): Promise<FixtureSite> {
   return {
     base,
     requests,
+    mutable,
     close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
   };
 }
