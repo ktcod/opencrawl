@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -84,16 +84,20 @@ describe("Store crawl jobs", () => {
 
   it("marks interrupted jobs failed on reopen and prunes old ones", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "opencrawl-store-"));
-    const file = path.join(dir, "t.db");
-    const a = new Store(file);
-    a.insertJob(job("running", "scraping"));
-    a.insertJob({ ...job("ancient"), createdAt: Date.now() - 30 * 24 * 3600 * 1000 });
-    a.close();
-    const b = new Store(file);
-    expect(b.getJob("running")).toMatchObject({ status: "failed" });
-    expect(b.getJob("running")?.errors[0]?.error).toMatch(/interrupted/);
-    expect(b.getJob("ancient")).toBeUndefined();
-    b.close();
+    try {
+      const file = path.join(dir, "t.db");
+      const a = new Store(file);
+      a.insertJob(job("running", "scraping"));
+      a.insertJob({ ...job("ancient"), createdAt: Date.now() - 30 * 24 * 3600 * 1000 });
+      a.close();
+      const b = new Store(file);
+      expect(b.getJob("running")).toMatchObject({ status: "failed" });
+      expect(b.getJob("running")?.errors[0]?.error).toMatch(/interrupted/);
+      expect(b.getJob("ancient")).toBeUndefined();
+      b.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

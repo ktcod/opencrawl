@@ -242,7 +242,7 @@ export function createApp(options: AppOptions = {}): Hono {
         }
         parseOptions = validate(parseOptionsSchema, raw);
       }
-      const dir = await mkdtemp(path.join(tmpdir(), "opencrawl-"));
+      const dir = await mkdtemp(path.join(tmpdir(), "opencrawl-upload-"));
       try {
         const filePath = path.join(dir, `upload${ext}`);
         await writeFile(filePath, Buffer.from(await file.arrayBuffer()));

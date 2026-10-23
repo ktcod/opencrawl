@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "./quiet.js";
 import { parseArgs } from "node:util";
 import { writeFile } from "node:fs/promises";
 import { VERSION } from "./config.js";

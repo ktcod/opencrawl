@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -18,6 +18,7 @@ const never = { formats: ["markdown" as const], render: "never" as const };
 describe("persistent crawl jobs", () => {
   it("survive a store reopen and paginate", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "opencrawl-jobs-"));
+    try {
     const file = path.join(dir, "jobs.db");
     const store = new Store(file);
     const job = await crawl(`${site.base}/docs/`, { sitemap: "skip", scrapeOptions: never }, { store });
@@ -36,6 +37,9 @@ describe("persistent crawl jobs", () => {
     expect(getCrawlErrors(job.id, { store: reopened })).toEqual({ errors: [], robotsBlocked: [] });
     expect(getCrawlStatus("missing", {}, { store: reopened })).toBeUndefined();
     reopened.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

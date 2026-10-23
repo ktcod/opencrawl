@@ -14,7 +14,7 @@ afterAll(() => site.close());
 const jsonPost = (app: ReturnType<typeof createApp>, path: string, body: unknown, headers: Record<string, string> = {}) =>
   app.request(path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 
-const tempDirs = async () => (await readdir(tmpdir())).filter((n) => n.startsWith("opencrawl-")).length;
+const tempDirs = async () => (await readdir(tmpdir())).filter((n) => n.startsWith("opencrawl-upload-")).length;
 
 describe("HTTP hardening", () => {
   const app = createApp();
