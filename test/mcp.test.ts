@@ -1,0 +1,66 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createMcpServer } from "../src/mcp.js";
+import { startFixtureSite, type FixtureSite } from "./helpers/site.js";
+
+let site: FixtureSite;
+let client: Client;
+beforeAll(async () => {
+  site = await startFixtureSite();
+  const server = createMcpServer();
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  client = new Client({ name: "test", version: "0.0.0" });
+  await client.connect(clientTransport);
+});
+afterAll(async () => {
+  await client.close();
+  await site.close();
+});
+
+const textOf = (result: Awaited<ReturnType<Client["callTool"]>>) => (result.content as Array<{ type: string; text: string }>)[0]!.text;
+
+describe("MCP server", () => {
+  it("exposes the scrape, map, crawl, status, search and parse tools", async () => {
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      "check_crawl_status",
+      "crawl",
+      "map",
+      "parse",
+      "scrape",
+      "search",
+    ]);
+  });
+
+  it("scrape returns raw markdown for markdown-only requests", async () => {
+    const result = await client.callTool({ name: "scrape", arguments: { url: `${site.base}/docs/a`, render: "never" } });
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain("# Doc A");
+  });
+
+  it("scrape returns JSON for multi-format requests", async () => {
+    const result = await client.callTool({ name: "scrape", arguments: { url: `${site.base}/docs/a`, formats: ["markdown", "links"], render: "never" } });
+    const doc = JSON.parse(textOf(result));
+    expect(doc.links).toContain(`${site.base}/docs/b`);
+    expect(doc.metadata.title).toBe("Doc A");
+  });
+
+  it("map and crawl work end to end", async () => {
+    const mapped = JSON.parse(textOf(await client.callTool({ name: "map", arguments: { url: site.base, sitemap: "only" } })));
+    expect(mapped.links.map((l: { url: string }) => l.url)).toContain(`${site.base}/docs/a`);
+    const crawled = JSON.parse(
+      textOf(await client.callTool({ name: "crawl", arguments: { url: `${site.base}/docs/`, sitemap: "skip", limit: 2, scrapeOptions: { render: "never" } } })),
+    );
+    expect(crawled.status).toBe("completed");
+    expect(crawled.data).toHaveLength(2);
+    const status = JSON.parse(textOf(await client.callTool({ name: "check_crawl_status", arguments: { id: crawled.id } })));
+    expect(status.completed).toBe(2);
+  });
+
+  it("reports tool errors with isError", async () => {
+    const result = await client.callTool({ name: "parse", arguments: { filePath: "/definitely/not/here.pdf" } });
+    expect(result.isError).toBe(true);
+  });
+});
