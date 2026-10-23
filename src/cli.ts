@@ -5,6 +5,8 @@ import { writeFile } from "node:fs/promises";
 import { VERSION } from "./config.js";
 import { activeBrowserChannel, closeBrowser, isBrowserAvailable } from "./browser.js";
 import { crawl } from "./crawl.js";
+import { extract } from "./extract.js";
+import type { SelectorSpec } from "./extract.js";
 import { startServer } from "./http.js";
 import { map } from "./map.js";
 import { runStdioServer } from "./mcp.js";
@@ -25,6 +27,8 @@ Usage:
   opencrawl map <url> [--search q] [--limit n] [--sitemap include|skip|only] [--json] [-o file]
   opencrawl crawl <url> [--limit n] [--max-depth n] [--include-paths a,b] [--exclude-paths a,b] [--entire-domain] [-o file]
   opencrawl search <query> [--limit n] [--scrape] [--json] [-o file]
+  opencrawl extract <url> [--select name=css[@attr][*]]... [--no-structured] [--no-tables] [--csv] [-o file]
+                                         JSON-LD, microdata, Open Graph, meta, CSS selections and tables (no LLM)
   opencrawl search-local <query> [--limit n] [--site host] [--since iso] [--json]
                                          Full-text search over everything already scraped (offline)
   opencrawl watch <url> [--no-diff] [--json]   Re-scrape and report new | same | changed (+diff) | removed
@@ -216,6 +220,42 @@ async function main(argv: string[]): Promise<number> {
           lines.push("");
         }
         await emit(lines.join("\n") || "No results found.", values.output);
+      }
+      return 0;
+    }
+    case "extract": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          select: { type: "string", multiple: true },
+          "no-structured": { type: "boolean" },
+          "no-tables": { type: "boolean" },
+          csv: { type: "boolean" },
+          render: { type: "string" },
+          output: { type: "string", short: "o" },
+        },
+      });
+      const url = positionals[0];
+      if (!url) throw new Error("extract needs a URL");
+      const selectors: Record<string, SelectorSpec> = {};
+      for (const raw of values.select ?? []) {
+        // name=selector[@attribute][*]
+        const match = /^([^=]+)=(.+?)(?:@([\w:-]+))?(\*)?$/.exec(raw);
+        if (!match) throw new Error(`--select expects name=selector[@attribute][*], got "${raw}"`);
+        const [, name, selector, attribute, star] = match;
+        selectors[name!.trim()] = { selector: selector!.trim(), attribute: attribute || undefined, multiple: star === "*" };
+      }
+      const result = await extract(url, {
+        structured: !values["no-structured"],
+        tables: values["no-tables"] ? false : { csv: !!values.csv },
+        selectors: Object.keys(selectors).length ? selectors : undefined,
+        scrapeOptions: { render: values.render as "auto" | "always" | "never" | undefined },
+      });
+      if (values.csv && result.tables?.length) {
+        await emit(result.tables.map((t) => `# table ${t.index}${t.caption ? `: ${t.caption}` : ""}\n${t.csv ?? ""}`).join("\n\n"), values.output);
+      } else {
+        await emit(JSON.stringify({ success: true, data: result }, null, 2), values.output);
       }
       return 0;
     }

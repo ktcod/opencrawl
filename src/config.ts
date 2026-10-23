@@ -48,4 +48,4 @@ export const CRAWL_PAGE_SIZE = Number(process.env.OPENCRAWL_CRAWL_PAGE_SIZE ?? 2
 /** Finished crawl jobs are kept in the store this long. */
 export const JOB_RETENTION_MS = Number(process.env.OPENCRAWL_JOB_RETENTION_DAYS ?? 7) * 24 * 60 * 60 * 1000;
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";

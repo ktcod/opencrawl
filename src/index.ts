@@ -24,6 +24,8 @@ export * as schemas from "./schemas.js";
 export { Store, getStore, useStore, resolveStorePath, contentHash, documentKey } from "./store.js";
 export type { StoredDocument, StoredJob, WatchState, LocalSearchHit, LocalSearchOptions } from "./store.js";
 export { watch } from "./watch.js";
+export { extract, extractFromHtml, extractFromDocument, extractTables, extractJsonLd, extractMicrodata, extractOpenGraph, extractSelectors, toCsv } from "./extract.js";
+export type { ExtractOptions, ExtractResult, ExtractedTable, SelectorSpec, TableOptions, MicrodataItem, StructuredSource } from "./extract.js";
 export type { WatchResult, WatchStatus, WatchOptions } from "./watch.js";
 export { scrapeWithStore } from "./scrape.js";
 export type { ScrapeResult, ScrapeDeps } from "./scrape.js";

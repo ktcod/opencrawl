@@ -3,9 +3,10 @@ import { z } from "zod";
 import { closeBrowser } from "./browser.js";
 import { VERSION } from "./config.js";
 import { crawl, getCrawlStatus } from "./crawl.js";
+import { extract } from "./extract.js";
 import { map } from "./map.js";
 import { parseFile } from "./parse.js";
-import { crawlOptionShape, resolveScrapeOptions, scrapeOptionShape, scrapeOptionsSchema } from "./schemas.js";
+import { crawlOptionShape, extractOptionShape, resolveScrapeOptions, scrapeOptionShape, scrapeOptionsSchema } from "./schemas.js";
 import { scrape } from "./scrape.js";
 import { search } from "./search.js";
 import { getStore } from "./store.js";
@@ -145,6 +146,29 @@ export function createMcpServer(): McpServer {
       try {
         const result = await search({ ...request, scrapeOptions: scrapeOptions ? resolveScrapeOptions(scrapeOptions) : undefined });
         return json({ success: true, ...result });
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    `${prefix}extract`,
+    {
+      title: "Extract structured data",
+      description:
+        "Pull structured data from a page without a language model: JSON-LD, microdata, Open Graph, Twitter card and meta tags (structured, default all), values matched by CSS selectors (selectors: { name: \"css\" } or { name: { selector, attribute?, type?, multiple?, fields? } }), and HTML tables as JSON rows (tables: true, or { csv: true } to also get CSV). Exact values, no hallucination; use this before asking a model to read a page.",
+      inputSchema: {
+        url: z.string().min(1),
+        ...extractOptionShape,
+        waitFor: z.number().min(0).max(60_000).optional(),
+        render: z.enum(["auto", "always", "never"]).optional(),
+        maxAge: z.number().optional(),
+      },
+    },
+    async ({ url, waitFor, render, maxAge, ...options }) => {
+      try {
+        return json(await extract(url, { ...options, scrapeOptions: { waitFor, render, maxAge } }));
       } catch (err) {
         return failure(err);
       }

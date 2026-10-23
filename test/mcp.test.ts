@@ -27,6 +27,7 @@ describe("MCP server", () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       "check_crawl_status",
       "crawl",
+      "extract",
       "map",
       "parse",
       "scrape",
@@ -68,6 +69,14 @@ describe("MCP server", () => {
     expect(again.status).toBe("same");
     const hits = JSON.parse(textOf(await client.callTool({ name: "search_local", arguments: { query: "Delta" } })));
     expect(hits.data[0].url).toBe(`${site.base}/docs/deep/d`);
+  });
+
+  it("extract works through MCP with nested selectors", async () => {
+    const result = JSON.parse(
+      textOf(await client.callTool({ name: "extract", arguments: { url: `${site.base}/structured`, structured: ["openGraph"], tables: false, selectors: { products: { selector: ".product", multiple: true, fields: { name: ".name" } } }, render: "never" } })),
+    );
+    expect(result.openGraph["og:title"]).toBe("OG Title");
+    expect(result.selected.products).toEqual([{ name: "Alpha" }, { name: "Beta" }]);
   });
 
   it("reports tool errors with isError", async () => {

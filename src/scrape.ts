@@ -17,6 +17,7 @@ import {
   selectMainContent,
   serializeClean,
 } from "./html.js";
+import { extractFromDocument, type ExtractOptions } from "./extract.js";
 import { extractPdf, isPdfBuffer } from "./pdf.js";
 import { getStore, type Store } from "./store.js";
 import { normalizeUrl } from "./urls.js";
@@ -24,6 +25,7 @@ import type {
   AttributesFormat,
   Document as ScrapedDocument,
   DocumentMetadata,
+  ExtractFormat,
   FormatOption,
   ScrapeOptions,
   ScreenshotFormat,
@@ -34,13 +36,14 @@ const LLM_FORMATS = new Set(["json", "summary", "changetracking", "branding", "q
 
 /** Canonical (camelCase) spelling for each format, keyed by lowercase. */
 const CANONICAL_FORMATS = new Map(
-  ["markdown", "html", "rawHtml", "links", "images", "screenshot", "attributes", "summary", "changeTracking", "branding", "json", "query", "audio", "video"].map((f) => [f.toLowerCase(), f]),
+  ["markdown", "html", "rawHtml", "links", "images", "screenshot", "attributes", "extract", "summary", "changeTracking", "branding", "json", "query", "audio", "video"].map((f) => [f.toLowerCase(), f]),
 );
 
 export interface NormalizedFormats {
   types: Set<string>;
   screenshot?: ScreenshotFormat;
   attributes?: AttributesFormat;
+  extract?: ExtractOptions;
   unsupported: string[];
 }
 
@@ -64,6 +67,12 @@ export function normalizeFormats(formats?: FormatOption[]): NormalizedFormats {
     if (lower === "attributes") {
       out.types.add("attributes");
       if (typeof format !== "string") out.attributes = format as AttributesFormat;
+      continue;
+    }
+    if (lower === "extract") {
+      out.types.add("extract");
+      const { type: _type, ...rest } = typeof format === "string" ? ({ type: "extract" } as ExtractFormat) : (format as ExtractFormat);
+      out.extract = rest as ExtractOptions;
       continue;
     }
     out.types.add(type);
@@ -138,6 +147,8 @@ export function documentFromHtml(
   if (nf.types.has("images")) doc.images = extractImages(document, page.url);
   if (nf.types.has("attributes") && nf.attributes) doc.attributes = extractAttributes(document, nf.attributes.selectors);
   if (nf.types.has("rawHtml")) doc.rawHtml = page.html;
+  // Structured data lives in <script>/<meta> tags, which main-content pruning removes: extract first.
+  if (nf.types.has("extract")) doc.extract = extractFromDocument(document, page.url, nf.extract ?? {});
   applyTagFilters(document, options.includeTags, options.excludeTags);
   // An explicit includeTags list is the caller's own main-content choice; do not prune it again.
   const onlyMainContent = (options.onlyMainContent ?? true) && !(options.includeTags && options.includeTags.length > 0);
@@ -218,7 +229,8 @@ export async function scrapeWithStore(input: string, options: ScrapeOptions = {}
   const url = normalizeUrl(input);
   const nf = normalizeFormats(options.formats);
   const maxAge = options.maxAge ?? DEFAULT_MAX_AGE_MS;
-  if (store && maxAge > 0 && !nf.types.has("screenshot")) {
+  // Screenshots are not stored and extraction options vary per request, so neither is served from the cache.
+  if (store && maxAge > 0 && !nf.types.has("screenshot") && !nf.types.has("extract")) {
     const hit = store.getFreshDocument(url, maxAge, nf.types);
     if (hit) {
       const document: ScrapedDocument = { ...hit.document };

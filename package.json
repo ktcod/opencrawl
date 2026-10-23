@@ -1,6 +1,6 @@
 {
   "name": "opencrawl",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local, keyless web scraper: MCP server, v2-style HTTP API, CLI and library. Scrape, map, crawl, search and parse without an account or credits.",
   "license": "MIT",
   "type": "module",
@@ -28,14 +28,19 @@
     "cache",
     "change-detection",
     "crawler",
+    "extraction",
     "full-text-search",
+    "json-ld",
     "markdown",
     "mcp",
+    "microdata",
     "open-source",
+    "opengraph",
     "playwright",
     "scraper",
     "self-hosted",
-    "sqlite"
+    "sqlite",
+    "tables"
   ],
   "dependencies": {
     "@hono/node-server": "^2.1.5",

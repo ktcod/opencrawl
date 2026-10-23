@@ -6,7 +6,10 @@ markdown. No account, no credits, no data leaving your machine except the reques
 make to the sites you scrape.
 
 - **MCP server** with `scrape`, `map`, `crawl`, `check_crawl_status`, `search`, `parse`,
-  `search_local` and `watch` tools for Claude Code and any other MCP client.
+  `extract`, `search_local` and `watch` tools for Claude Code and any other MCP client.
+- **Structured extraction without a model**: JSON-LD, microdata, Open Graph, Twitter card
+  and meta tags, values picked by CSS selectors (with attributes, lists and nested fields),
+  and HTML tables as JSON rows or CSV. Exact values, no hallucination.
 - **Local store** (SQLite, no server): every scrape and crawl is saved. `maxAge` serves
   repeat requests from it, `search_local` full-text searches everything you have ever
   scraped (offline), crawl jobs survive restarts, and `watch` tells you what changed on a
@@ -50,7 +53,7 @@ Or edit `~/.claude.json`:
 ```
 
 Tools are registered as `scrape`, `map`, `crawl`, `check_crawl_status`, `search`, `parse`,
-`search_local` and `watch`. Set `OPENCRAWL_TOOL_PREFIX` to prefix them if an existing
+`extract`, `search_local` and `watch`. Set `OPENCRAWL_TOOL_PREFIX` to prefix them if an existing
 prompt expects other names.
 
 ## Use the HTTP API
@@ -72,6 +75,7 @@ curl -s http://127.0.0.1:3002/v2/scrape \
 | `DELETE /v2/crawl/:id` | | `{ success, status: "cancelled" }` |
 | `POST /v2/search` | `{ query, limit?, sources?, tbs?, includeDomains?, excludeDomains?, scrapeOptions? }` | `{ success, data: { web, news, images } }` |
 | `POST /v2/parse` | multipart `file` (+ `options` JSON), or `{ filePath }` from localhost | `{ success, data: Document }` |
+| `POST /v2/extract` | `{ url, structured?, selectors?, tables?, scrapeOptions? }` | `{ success, data: { jsonLd, microdata, openGraph, twitter, meta, selected, tables, errors } }` |
 | `POST /v2/watch` | `{ url, diff?, scrapeOptions? }` | `{ success, status: new \| same \| changed \| removed \| error, previous, current, diff?, linesAdded?, linesRemoved? }` |
 | `GET /v2/watches` | | `{ success, watches: [{ url, checkCount, lastCheckedAt, lastChangedAt }] }` |
 | `POST /v2/local-search` | `{ query, limit?, site?, since? }` | `{ success, data: [{ url, title, snippet, fetchedAt, score }] }` |
@@ -100,7 +104,34 @@ opencrawl scrape https://example.com --max-age 3600000   # reuse a snapshot unde
 opencrawl search-local "pricing tiers" --site docs.example.com
 opencrawl watch https://example.com/changelog              # new | same | changed (+diff) | removed
 opencrawl watch --list
+opencrawl extract https://example.com/product             # JSON-LD, microdata, OG, meta, tables
+opencrawl extract https://example.com/list --select "names=.product .name*" --select "links=.product a@href*"
+opencrawl extract https://example.com/stats --csv         # every table as CSV
 ```
+
+## Structured extraction
+
+`extract` reads what the page already states in machine-readable form, so an agent gets
+exact values before it reads any prose:
+
+- **Embedded data** (`structured`, default all): `jsonLd` (every `application/ld+json`
+  block, invalid ones reported under `errors`), `microdata` (items as JSON-LD-style
+  objects with `@type`, nested items and repeated properties as arrays), `openGraph`
+  (`og:*`, `article:*`, `product:*` and friends, repeated keys as arrays), `twitter`
+  and `meta` (title, lang, canonical, description, author, and so on).
+- **Selectors** (`selectors`): `{ "price": ".price" }` returns the first match's text.
+  A full spec is `{ selector, attribute?, type?: "text" | "html" | "attribute",
+  multiple?, fields? }`. `multiple` returns every match; `fields` evaluates sub-selectors
+  inside each match so a list of cards becomes a list of objects; `href`/`src` style
+  attributes come back absolute. Invalid selectors land in `errors`, not exceptions.
+- **Tables** (`tables`, default on): each `<table>` becomes `{ caption, headers, rows,
+  rowCount, columnCount }`. Header rows (`<thead>` or all-`<th>` rows) become keys,
+  duplicate headers get `_2` suffixes, `colspan`/`rowspan` are expanded, and
+  `{ csv: true }` adds RFC 4180 CSV. `selector` limits which tables, `minRows` and
+  `maxRows` bound them.
+
+The same options work as a scrape format, `{ type: "extract", ... }`, so a crawl can
+extract from every page it visits (the result lands in `document.extract`).
 
 ## The local store
 
@@ -148,6 +179,7 @@ const results = await search({ query: "self hosted scraper", limit: 5 });
 | Search sources web/news/images, time filters, domain filters, per-result scraping, github/pdf/research categories | Yes. News and images need SearXNG or Brave |
 | Parse PDF, HTML, text files | Yes. DOCX/XLSX not yet |
 | Cache (`maxAge`), offline full-text search, persistent crawl jobs, change tracking | Yes, via the local SQLite store |
+| Structured extraction: JSON-LD, microdata, Open Graph, meta, CSS selectors, tables to JSON/CSV | Yes, no model involved |
 | Browser actions, interactive sessions, agents, scheduled monitors, webhooks | No |
 | Proxies, stealth, caching options | Accepted and ignored |
 

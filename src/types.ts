@@ -17,7 +17,8 @@ export type FormatString =
   | "attributes"
   | "query"
   | "audio"
-  | "video";
+  | "video"
+  | "extract";
 
 export interface ScreenshotFormat {
   type: "screenshot";
@@ -31,12 +32,19 @@ export interface AttributesFormat {
   selectors: Array<{ selector: string; attribute: string }>;
 }
 
+export interface ExtractFormat {
+  type: "extract";
+  structured?: boolean | Array<"jsonLd" | "microdata" | "openGraph" | "twitter" | "meta">;
+  selectors?: Record<string, unknown>;
+  tables?: boolean | { selector?: string; csv?: boolean; maxRows?: number; minRows?: number };
+}
+
 export interface GenericFormat {
   type: FormatString;
   [key: string]: unknown;
 }
 
-export type FormatOption = FormatString | ScreenshotFormat | AttributesFormat | GenericFormat;
+export type FormatOption = FormatString | ScreenshotFormat | AttributesFormat | ExtractFormat | GenericFormat;
 
 export interface LocationConfig {
   country?: string;
@@ -126,6 +134,8 @@ export interface Document {
   images?: string[];
   screenshot?: string;
   attributes?: Array<{ selector: string; attribute: string; values: string[] }>;
+  /** Structured extraction output when the "extract" format was requested (opencrawl extension). */
+  extract?: unknown;
   warning?: string;
 }
 

@@ -29,6 +29,7 @@ What opencrawl chooses and why, and what it knowingly leaves out. Written 2026-1
 | Store | One SQLite file through Node's built-in `node:sqlite` (no native module). Documents are append-only snapshots keyed by a normalized URL; FTS5 indexes title and markdown; crawl jobs and their page order live in tables; watches keep a pointer to the last compared snapshot | Zero services, one file to back up or delete; snapshots make both the cache and change tracking trivial |
 | Cache | `maxAge` returns the newest successful snapshot within the window that carries every requested format; screenshots never hit the cache; default window 0 | Explicit opt-in staleness; a cached answer missing a requested format would be a silent lie |
 | Change tracking | `watch` compares SHA-256 of the markdown (html as fallback) and emits a unified diff; `removed` needs a prior baseline and a 404/410 | Hashing markdown ignores markup churn that does not change what a reader sees |
+| Extraction | Deterministic only: JSON-LD parsed as-is, microdata walked per the HTML spec (nested scopes own their properties, `itemref` honoured), Open Graph keyed by full property name, selectors evaluated with jsdom, tables expanded through a colspan/rowspan grid | The page's own structured data is more reliable than any model's reading of its prose, and it costs nothing |
 | Input bounds | 50 MB response cap, gzip output cap, 50 sitemap fetches per job, validated request bodies with clamped numbers | Hostile sites and bad clients should cost bounded memory and time |
 
 ## Not supported

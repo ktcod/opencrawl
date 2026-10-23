@@ -129,3 +129,17 @@ describe("store-backed endpoints", () => {
     expect((await post(app, "/v2/local-search", { query: "" })).status).toBe(400);
   });
 });
+
+describe("POST /v2/extract", () => {
+  it("returns structured data, selections and tables", async () => {
+    const app = createApp();
+    const res = await post(app, "/v2/extract", { url: `${site.base}/structured`, selectors: { names: { selector: ".name", multiple: true } }, tables: { csv: true }, scrapeOptions: { render: "never" } });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    expect(json.data.jsonLd[0].name).toBe("Widget");
+    expect(json.data.selected.names).toEqual(["Alpha", "Beta"]);
+    expect(json.data.tables[0].csv).toContain("Item,Price,Price_2");
+    expect((await post(app, "/v2/extract", { url: site.base, selectors: { x: { selector: "" } } })).status).toBe(400);
+  });
+});

@@ -8,11 +8,13 @@ import { serve } from "@hono/node-server";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { CRAWL_PAGE_SIZE, MAX_CRAWL_CONCURRENCY, VERSION } from "./config.js";
 import { activeCrawlCount, cancelCrawl, getCrawlErrors, getCrawlStatus, listActiveCrawls, startCrawl } from "./crawl.js";
+import { extract } from "./extract.js";
 import { map } from "./map.js";
 import { PARSE_EXTENSIONS, parseFile } from "./parse.js";
 import { scrape } from "./scrape.js";
 import {
   crawlRequestSchema,
+  extractRequestSchema,
   localSearchRequestSchema,
   mapRequestSchema,
   parseOptionsSchema,
@@ -193,6 +195,12 @@ export function createApp(options: AppOptions = {}): Hono {
     const { scrapeOptions, ...request } = validate(searchRequestSchema, await readJson(c));
     const result = await search({ ...request, scrapeOptions: scrapeOptions ? resolveScrapeOptions(scrapeOptions) : undefined });
     return c.json({ success: true, data: result.data, warning: result.warning, id: randomUUID(), creditsUsed: 0 });
+  });
+
+  app.post("/v2/extract", async (c) => {
+    const { url, scrapeOptions, ...options } = validate(extractRequestSchema, await readJson(c));
+    const data = await extract(url, { ...options, scrapeOptions: scrapeOptions ? resolveScrapeOptions(scrapeOptions) : undefined });
+    return c.json({ success: true, data });
   });
 
   app.post("/v2/watch", async (c) => {

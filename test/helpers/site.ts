@@ -61,6 +61,36 @@ function routes(base: string): Record<string, Route> {
     "/docs/deep/d": { body: page("Doc D", `<main><h1>Doc D</h1><p>Delta content.</p></main>`) },
     "/blog/post-1": { body: page("Post 1", `<main><h1>Post 1</h1><p>First post.</p><a href="/blog/post-2">next</a></main>`) },
     "/blog/post-2": { body: page("Post 2", `<main><h1>Post 2</h1><p>Second post.</p><a href="/blog/missing">gone</a></main>`) },
+    "/structured": {
+      body: `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Structured Fixture</title>
+<meta name="description" content="A page full of structured data"><meta name="author" content="Fixture Author">
+<meta property="og:title" content="OG Title"><meta property="og:image" content="/og1.png"><meta property="og:image" content="/og2.png">
+<meta property="article:tag" content="fixtures"><meta name="twitter:card" content="summary"><meta name="twitter:site" content="@fixture">
+<link rel="canonical" href="/structured">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"Widget","offers":{"@type":"Offer","price":"9.99","priceCurrency":"USD"}}</script>
+<script type="application/ld+json">[{"@type":"BreadcrumbList","itemListElement":[]}]</script>
+<script type="application/ld+json">{ this is not json </script>
+</head><body>
+<div itemscope itemtype="https://schema.org/Person" itemid="#ada">
+  <span itemprop="name">Ada Lovelace</span>
+  <a itemprop="url" href="/ada">profile</a>
+  <div itemprop="address" itemscope itemtype="https://schema.org/PostalAddress"><span itemprop="addressLocality">London</span></div>
+  <img itemprop="image" src="/ada.png" alt="">
+  <meta itemprop="birthDate" content="1815-12-10">
+  <span itemprop="knowsAbout">math</span><span itemprop="knowsAbout">engines</span>
+  <time itemprop="deathDate" datetime="1852-11-27">27 Nov 1852</time>
+</div>
+<ul class="products">
+  <li class="product"><h3 class="name">Alpha</h3><span class="price">$1</span><a class="buy" href="/buy/alpha">Buy</a></li>
+  <li class="product"><h3 class="name">Beta</h3><span class="price">$2</span><a class="buy" href="/buy/beta">Buy</a></li>
+</ul>
+<table id="t1"><caption>Prices</caption><thead><tr><th>Item</th><th>Price</th><th>Price</th></tr></thead>
+<tbody><tr><td>Alpha</td><td>1</td><td>1.5</td></tr><tr><td rowspan="2">Beta</td><td>2</td><td>2.5</td></tr><tr><td colspan="2">n/a</td></tr></tbody></table>
+<table id="t2"><tr><td>a</td><td>b<br>c</td></tr><tr><td>d</td><td>e</td></tr></table>
+<table id="t3"><tr><th>Name</th><th>Value, "quoted"</th></tr><tr><td>x</td><td>has, comma</td></tr></table>
+<table id="t4"><tr><th>Only header</th></tr></table>
+</body></html>`,
+    },
     "/articles": {
       body: page(
         "Articles",

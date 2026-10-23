@@ -135,6 +135,46 @@ export const parseOptionsSchema = z.object({
 });
 export const parseRequestSchema = z.object({ filePath: z.string().min(1).max(4096), ...parseOptionsSchema.shape });
 
+export interface SelectorSpecInput {
+  selector: string;
+  attribute?: string;
+  type?: "text" | "html" | "attribute";
+  multiple?: boolean;
+  fields?: Record<string, SelectorSpecInput | string>;
+}
+
+export const selectorSpecSchema: z.ZodType<SelectorSpecInput> = z.lazy(() =>
+  z.object({
+    selector: z.string().min(1).max(500),
+    attribute: z.string().min(1).max(100).optional(),
+    type: z.enum(["text", "html", "attribute"]).optional(),
+    multiple: z.boolean().optional(),
+    fields: z.record(z.string().min(1).max(100), z.union([z.string().min(1).max(500), selectorSpecSchema])).optional(),
+  }),
+);
+
+export const extractOptionShape = {
+  structured: z.union([z.boolean(), z.array(z.enum(["jsonLd", "microdata", "openGraph", "twitter", "meta"]))]).optional(),
+  selectors: z.record(z.string().min(1).max(100), z.union([z.string().min(1).max(500), selectorSpecSchema])).optional(),
+  tables: z
+    .union([
+      z.boolean(),
+      z.object({
+        selector: z.string().min(1).max(500).optional(),
+        csv: z.boolean().optional(),
+        maxRows: z.number().int().min(1).max(100_000).optional(),
+        minRows: z.number().int().min(1).max(100_000).optional(),
+      }),
+    ])
+    .optional(),
+};
+
+export const extractRequestSchema = z.object({
+  url: z.string().min(1).max(8192),
+  ...extractOptionShape,
+  scrapeOptions: scrapeOptionsSchema.optional(),
+});
+
 export const watchRequestSchema = z.object({
   url: z.string().min(1).max(8192),
   diff: z.boolean().optional(),
