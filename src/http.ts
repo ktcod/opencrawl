@@ -8,13 +8,17 @@ import { serve } from "@hono/node-server";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { CRAWL_PAGE_SIZE, MAX_CRAWL_CONCURRENCY, VERSION } from "./config.js";
 import { activeCrawlCount, cancelCrawl, getCrawlErrors, getCrawlStatus, listActiveCrawls, startCrawl } from "./crawl.js";
+import { batchScrape } from "./batch.js";
 import { extract } from "./extract.js";
+import { fetchFeed } from "./feed.js";
 import { map } from "./map.js";
 import { PARSE_EXTENSIONS, parseFile } from "./parse.js";
 import { scrape } from "./scrape.js";
 import {
+  batchRequestSchema,
   crawlRequestSchema,
   extractRequestSchema,
+  feedRequestSchema,
   localSearchRequestSchema,
   mapRequestSchema,
   parseOptionsSchema,
@@ -197,6 +201,18 @@ export function createApp(options: AppOptions = {}): Hono {
     return c.json({ success: true, data: result.data, warning: result.warning, id: randomUUID(), creditsUsed: 0 });
   });
 
+  app.post("/v2/batch/scrape", async (c) => {
+    const { urls, scrapeOptions, ...rest } = validate(batchRequestSchema, await readJson(c));
+    const result = await batchScrape(urls, { ...rest, scrapeOptions: scrapeOptions ? resolveScrapeOptions(scrapeOptions) : undefined });
+    return c.json({ success: true, ...result });
+  });
+
+  app.post("/v2/feed", async (c) => {
+    const { url, scrapeOptions, ...rest } = validate(feedRequestSchema, await readJson(c));
+    const feed = await fetchFeed(url, { ...rest, scrapeOptions: scrapeOptions ? resolveScrapeOptions(scrapeOptions) : undefined });
+    return c.json({ success: true, data: feed });
+  });
+
   app.post("/v2/extract", async (c) => {
     const { url, scrapeOptions, ...options } = validate(extractRequestSchema, await readJson(c));
     const data = await extract(url, { ...options, scrapeOptions: scrapeOptions ? resolveScrapeOptions(scrapeOptions) : undefined });
@@ -238,7 +254,7 @@ export function createApp(options: AppOptions = {}): Hono {
       const original = path.basename(typeof file.name === "string" && file.name ? file.name : "upload");
       const ext = path.extname(original).toLowerCase();
       if (!PARSE_EXTENSIONS.has(ext)) {
-        throw new HttpError(400, `Unsupported file type "${ext || "(none)"}". opencrawl parses PDF, HTML and plain-text files.`);
+        throw new HttpError(400, `Unsupported file type "${ext || "(none)"}". opencrawl parses PDF, DOCX, XLSX, HTML and plain-text files.`);
       }
       let parseOptions = {};
       if (typeof form.options === "string" && form.options.trim()) {

@@ -18,9 +18,15 @@ describe("parseFile", () => {
     const txtPath = path.join(dir, "notes.md");
     await writeFile(txtPath, "# Notes\n\nplain");
     expect((await parseFile(txtPath)).markdown).toBe("# Notes\n\nplain");
-    const docxPath = path.join(dir, "x.docx");
-    await writeFile(docxPath, "not really a docx");
-    await expect(parseFile(docxPath)).rejects.toThrow(/Unsupported file type/);
+    const otherPath = path.join(dir, "x.xyz");
+    await writeFile(otherPath, "unknown format");
+    await expect(parseFile(otherPath)).rejects.toThrow(/Unsupported file type/);
+    const fakeDocx = path.join(dir, "fake.docx");
+    await writeFile(fakeDocx, "not really a docx");
+    await expect(parseFile(fakeDocx)).rejects.toThrow(/Invalid DOCX file/);
+    const fakeXlsx = path.join(dir, "fake.xlsx");
+    await writeFile(fakeXlsx, "not really a spreadsheet");
+    await expect(parseFile(fakeXlsx)).rejects.toThrow(/Invalid XLSX file/);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

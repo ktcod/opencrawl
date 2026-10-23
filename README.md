@@ -5,8 +5,14 @@ server, a v2-style HTTP API, a CLI and a TypeScript library that turn web pages 
 markdown. No account, no credits, no data leaving your machine except the requests you
 make to the sites you scrape.
 
-- **MCP server** with `scrape`, `map`, `crawl`, `check_crawl_status`, `search`, `parse`,
-  `extract`, `search_local` and `watch` tools for Claude Code and any other MCP client.
+- **MCP server** with `scrape`, `batch_scrape`, `map`, `crawl`, `check_crawl_status`, `search`,
+  `parse`, `extract`, `feed`, `search_local` and `watch` tools for Claude Code and any other
+  MCP client.
+- **Feeds**: parse RSS 2.0, RSS 1.0, Atom and JSON Feed, or discover a site's feed from a
+  page; the cheapest way to ask "what's new".
+- **Documents**: PDF, DOCX and XLSX, from disk or from a URL.
+- **Polite and resilient**: retries 429/503 with backoff and `Retry-After`, honours
+  robots.txt `Crawl-delay`, and can write every page to disk as markdown.
 - **Structured extraction without a model**: JSON-LD, microdata, Open Graph, Twitter card
   and meta tags, values picked by CSS selectors (with attributes, lists and nested fields),
   and HTML tables as JSON rows or CSV. Exact values, no hallucination.
@@ -52,8 +58,9 @@ Or edit `~/.claude.json`:
 }
 ```
 
-Tools are registered as `scrape`, `map`, `crawl`, `check_crawl_status`, `search`, `parse`,
-`extract`, `search_local` and `watch`. Set `OPENCRAWL_TOOL_PREFIX` to prefix them if an existing
+Tools are registered as `scrape`, `batch_scrape`, `map`, `crawl`, `check_crawl_status`,
+`search`, `parse`, `extract`, `feed`, `search_local` and `watch`. `crawl` and `batch_scrape`
+accept `outDir` to write pages to disk instead of returning them. Set `OPENCRAWL_TOOL_PREFIX` to prefix them if an existing
 prompt expects other names.
 
 ## Use the HTTP API
@@ -68,13 +75,15 @@ curl -s http://127.0.0.1:3002/v2/scrape \
 | Endpoint | Body | Response |
 | --- | --- | --- |
 | `POST /v2/scrape` | `{ url, formats?, onlyMainContent?, includeTags?, excludeTags?, waitFor?, timeout?, mobile?, headers?, render? }` | `{ success, data: Document }` |
+| `POST /v2/batch/scrape` | `{ urls[], concurrency?, ignoreInvalidURLs?, scrapeOptions? }` | `{ success, data: Document[], errors, total, completed }` (input order) |
+| `POST /v2/feed` | `{ url, limit?, since?, discover?, scrape?, scrapeOptions? }` | `{ success, data: { type, title, link, items: [{ title, url, published, author, summary, content, categories }], discovered? } }` |
 | `POST /v2/map` | `{ url, search?, sitemap?, includeSubdomains?, ignoreQueryParameters?, limit? }` | `{ success, links: [{ url, title? }] }` |
 | `POST /v2/crawl` | `{ url, limit?, maxDiscoveryDepth?, includePaths?, excludePaths?, sitemap?, crawlEntireDomain?, allowSubdomains?, allowExternalLinks?, delay?, maxConcurrency?, scrapeOptions? }` | `{ success, id, url }` |
 | `GET /v2/crawl/:id?skip=0&limit=200` | | `{ success, status, total, completed, data: Document[], next }`; `next` is the URL of the following page or `null` |
 | `GET /v2/crawl/:id/errors` | | `{ success, errors, robotsBlocked }` |
 | `DELETE /v2/crawl/:id` | | `{ success, status: "cancelled" }` |
 | `POST /v2/search` | `{ query, limit?, sources?, tbs?, includeDomains?, excludeDomains?, scrapeOptions? }` | `{ success, data: { web, news, images } }` |
-| `POST /v2/parse` | multipart `file` (+ `options` JSON), or `{ filePath }` from localhost | `{ success, data: Document }` |
+| `POST /v2/parse` | multipart `file` (+ `options` JSON), or `{ filePath }` from localhost; PDF, DOCX, XLSX, HTML, text | `{ success, data: Document }` |
 | `POST /v2/extract` | `{ url, structured?, selectors?, tables?, scrapeOptions? }` | `{ success, data: { jsonLd, microdata, openGraph, twitter, meta, selected, tables, errors } }` |
 | `POST /v2/watch` | `{ url, diff?, scrapeOptions? }` | `{ success, status: new \| same \| changed \| removed \| error, previous, current, diff?, linesAdded?, linesRemoved? }` |
 | `GET /v2/watches` | | `{ success, watches: [{ url, checkCount, lastCheckedAt, lastChangedAt }] }` |
@@ -99,7 +108,11 @@ opencrawl scrape https://app.example.com --render always  # force a browser rend
 opencrawl map https://docs.example.com --search "auth" --limit 20
 opencrawl crawl https://docs.example.com --limit 50 --include-paths "^/docs" -o crawl.json
 opencrawl search "query" --limit 5 --scrape
-opencrawl parse ./report.pdf
+opencrawl parse ./report.pdf                               # also .docx and .xlsx
+opencrawl scrape https://a.example https://b.example --out-dir ./pages   # batch, one folder per page
+opencrawl crawl https://docs.example.com --limit 50 --out-dir ./docs      # <dir>/<host>/<path>/index.md
+opencrawl feed https://example.com/blog --limit 5           # discovers and parses the feed
+opencrawl feed https://example.com/feed.xml --scrape --json # items plus each page's markdown
 opencrawl scrape https://example.com --max-age 3600000   # reuse a snapshot under an hour old
 opencrawl search-local "pricing tiers" --site docs.example.com
 opencrawl watch https://example.com/changelog              # new | same | changed (+diff) | removed
@@ -108,6 +121,27 @@ opencrawl extract https://example.com/product             # JSON-LD, microdata, 
 opencrawl extract https://example.com/list --select "names=.product .name*" --select "links=.product a@href*"
 opencrawl extract https://example.com/stats --csv         # every table as CSV
 ```
+
+## Feeds, documents and files on disk
+
+- **Feeds.** `feed` accepts a feed URL or any page. For a page it reads
+  `<link rel="alternate">` tags, then probes `/feed`, `/rss.xml`, `/atom.xml`, `/index.xml`,
+  `/feed.json` and friends. Items are normalized across RSS 2.0, RSS 1.0 (RDF), Atom and
+  JSON Feed: `title`, `url`, `published`, `updated`, `author`, `summary` (text), `content`
+  (markdown), `categories`. `since` filters by date, `scrape: true` attaches each item's page.
+- **DOCX and XLSX.** `parse` and `scrape` handle them next to PDF. DOCX goes through the same
+  HTML-to-markdown pipeline as web pages (headings, bold, lists survive). Each XLSX sheet
+  becomes a markdown table whose first row is the header; ask for the `extract` format to get
+  the sheets as table objects too.
+- **Out-dir.** `crawl --out-dir`, `scrape <urls...> --out-dir`, and `outDir` on the MCP
+  `crawl` and `batch_scrape` tools write one folder per page at
+  `<dir>/<host>/<path>/` with `index.md`, plus `index.html`, `links.txt`, `extract.json`,
+  `screenshot.png` and `metadata.json` when those formats were requested. Query strings
+  become a short hash so variants do not collide; nothing is written outside the directory.
+- **Retries and politeness.** Plain HTTP fetches retry 429 and 503 up to
+  `OPENCRAWL_RETRIES` (2) times, honouring `Retry-After` and capping each wait at
+  `OPENCRAWL_MAX_RETRY_WAIT_MS` (30 s). A crawl with no explicit `delay` uses the start
+  host's robots.txt `Crawl-delay`, which also serializes its requests.
 
 ## Structured extraction
 
@@ -177,7 +211,9 @@ const results = await search({ query: "self hosted scraper", limit: 5 });
 | Map with sitemap modes, keyword ranking, subdomains, query stripping, limit | Yes |
 | Crawl with limit, depth, include/exclude paths, subdomains, external links, entire-domain, delay, concurrency, sitemap modes, robots.txt | Yes. Default limit 100 pages |
 | Search sources web/news/images, time filters, domain filters, per-result scraping, github/pdf/research categories | Yes. News and images need SearXNG or Brave |
-| Parse PDF, HTML, text files | Yes. DOCX/XLSX not yet |
+| Parse PDF, DOCX, XLSX, HTML, text files | Yes |
+| Batch scrape, feeds (RSS/Atom/JSON), pages written to disk | Yes |
+| Retries on 429/503 with Retry-After, robots.txt Crawl-delay | Yes |
 | Cache (`maxAge`), offline full-text search, persistent crawl jobs, change tracking | Yes, via the local SQLite store |
 | Structured extraction: JSON-LD, microdata, Open Graph, meta, CSS selectors, tables to JSON/CSV | Yes, no model involved |
 | Browser actions, interactive sessions, agents, scheduled monitors, webhooks | No |
@@ -210,6 +246,9 @@ Force one with `OPENCRAWL_SEARCH_BACKEND=duckduckgo|searxng|brave`.
 | `OPENCRAWL_DEFAULT_MAX_AGE_MS` | `0` | Cache window used when a request sets no `maxAge` |
 | `OPENCRAWL_CRAWL_PAGE_SIZE` | `200` | Documents per page on `GET /v2/crawl/:id` |
 | `OPENCRAWL_JOB_RETENTION_DAYS` | `7` | How long finished crawl jobs stay in the store |
+| `OPENCRAWL_RETRIES` | `2` | Retries on HTTP 429/503 per fetch |
+| `OPENCRAWL_MAX_RETRY_WAIT_MS` | `30000` | Longest wait between retries, even if Retry-After asks for more |
+| `OPENCRAWL_BATCH_CONCURRENCY` | `5` | Parallel pages for batch scrapes |
 | `OPENCRAWL_API_KEY` | unset | Bearer token required by the HTTP API. Required to bind a non-loopback `HOST` (or set `OPENCRAWL_INSECURE=1`) |
 | `OPENCRAWL_ALLOWED_HOSTS` | bind host | Extra `Host` header values the HTTP API accepts (DNS-rebinding guard); `*` disables the check |
 | `OPENCRAWL_ALLOWED_ORIGINS` | none | Browser origins allowed to call the HTTP API; any other `Origin` header is refused |

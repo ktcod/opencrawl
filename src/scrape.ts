@@ -18,6 +18,7 @@ import {
   serializeClean,
 } from "./html.js";
 import { extractFromDocument, type ExtractOptions } from "./extract.js";
+import { DOCX_MIME, XLSX_MIME, docxToHtml, sheetsToExtractedTables, sheetsToHtml, sheetsToMarkdown, xlsxToTables } from "./office.js";
 import { extractPdf, isPdfBuffer } from "./pdf.js";
 import { getStore, type Store } from "./store.js";
 import { normalizeUrl } from "./urls.js";
@@ -207,6 +208,54 @@ export async function documentFromPdf(
   return finish(doc, warnings);
 }
 
+export async function documentFromDocx(
+  data: Buffer,
+  requested: string,
+  finalUrl: string,
+  status: number,
+  options: ScrapeOptions,
+  nf: NormalizedFormats,
+  warnings: string[] = [],
+): Promise<ScrapedDocument> {
+  const { html, warnings: conversion } = await docxToHtml(data);
+  return documentFromHtml(
+    { html, status, url: finalUrl, contentType: DOCX_MIME, rendered: false },
+    requested,
+    { ...options, onlyMainContent: false },
+    nf,
+    [...warnings, ...conversion.map((w) => `docx: ${w}`)],
+  );
+}
+
+export async function documentFromXlsx(
+  data: Buffer,
+  requested: string,
+  finalUrl: string,
+  status: number,
+  nf: NormalizedFormats,
+  warnings: string[] = [],
+): Promise<ScrapedDocument> {
+  const sheets = await xlsxToTables(data);
+  const doc: ScrapedDocument = { metadata: { ...baseMetadata(requested, finalUrl, status, XLSX_MIME), numPages: sheets.length } };
+  if (nf.types.has("markdown")) doc.markdown = sheetsToMarkdown(sheets);
+  if (nf.types.has("html")) doc.html = sheetsToHtml(sheets);
+  if (nf.types.has("extract")) doc.extract = { url: finalUrl, tables: sheetsToExtractedTables(sheets) };
+  return finish(doc, warnings);
+}
+
+function officeKind(contentType: string, url: string): "docx" | "xlsx" | undefined {
+  const ct = contentType.toLowerCase();
+  let pathname = "";
+  try {
+    pathname = new URL(url).pathname.toLowerCase();
+  } catch {
+    /* ignore */
+  }
+  if (ct.includes("wordprocessingml") || pathname.endsWith(".docx")) return "docx";
+  if (ct.includes("spreadsheetml") || /\.xls[xm]$/.test(pathname)) return "xlsx";
+  return undefined;
+}
+
 function documentFromText(res: FetchedResource, requested: string, nf: NormalizedFormats, warnings: string[]): ScrapedDocument {
   const text = decodeText(res.body, res.contentType);
   const doc: ScrapedDocument = { metadata: baseMetadata(requested, res.url, res.status, res.contentType) };
@@ -288,6 +337,9 @@ async function scrapeFresh(url: string, options: ScrapeOptions, nf: NormalizedFo
   let kind = classifyContent(res.contentType, res.url);
   if (kind === "binary" && isPdfBuffer(res.body)) kind = "pdf";
   if (kind === "pdf") return documentFromPdf(res.body, url, res.url, res.status, options, nf, warnings);
+  const office = kind === "binary" ? officeKind(res.contentType, res.url) : undefined;
+  if (office === "docx") return documentFromDocx(res.body, url, res.url, res.status, options, nf, warnings);
+  if (office === "xlsx") return documentFromXlsx(res.body, url, res.url, res.status, nf, warnings);
   if (kind === "text") return documentFromText(res, url, nf, warnings);
   if (kind === "binary") {
     warnings.push(`unsupported content type "${res.contentType}"; nothing to extract`);

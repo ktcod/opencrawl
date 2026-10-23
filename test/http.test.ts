@@ -143,3 +143,18 @@ describe("POST /v2/extract", () => {
     expect((await post(app, "/v2/extract", { url: site.base, selectors: { x: { selector: "" } } })).status).toBe(400);
   });
 });
+
+describe("batch and feed endpoints", () => {
+  it("POST /v2/batch/scrape and POST /v2/feed", async () => {
+    const app = createApp();
+    const batch = await (await post(app, "/v2/batch/scrape", { urls: [`${site.base}/docs/a`, "bad url", `${site.base}/docs/b`], ignoreInvalidURLs: true, scrapeOptions: { render: "never" } })).json();
+    expect(batch).toMatchObject({ success: true, total: 3, completed: 2 });
+    expect(batch.data.map((d: { metadata: { title: string } }) => d.metadata.title)).toEqual(["Doc A", "Doc B"]);
+    expect(batch.errors).toHaveLength(1);
+    const feed = await (await post(app, "/v2/feed", { url: `${site.base}/blog`, limit: 1 })).json();
+    expect(feed.success).toBe(true);
+    expect(feed.data.type).toBe("rss");
+    expect(feed.data.items).toHaveLength(1);
+    expect((await post(app, "/v2/batch/scrape", { urls: [] })).status).toBe(400);
+  });
+});

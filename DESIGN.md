@@ -30,6 +30,10 @@ What opencrawl chooses and why, and what it knowingly leaves out. Written 2026-1
 | Cache | `maxAge` returns the newest successful snapshot within the window that carries every requested format; screenshots never hit the cache; default window 0 | Explicit opt-in staleness; a cached answer missing a requested format would be a silent lie |
 | Change tracking | `watch` compares SHA-256 of the markdown (html as fallback) and emits a unified diff; `removed` needs a prior baseline and a 404/410 | Hashing markdown ignores markup churn that does not change what a reader sees |
 | Extraction | Deterministic only: JSON-LD parsed as-is, microdata walked per the HTML spec (nested scopes own their properties, `itemref` honoured), Open Graph keyed by full property name, selectors evaluated with jsdom, tables expanded through a colspan/rowspan grid | The page's own structured data is more reliable than any model's reading of its prose, and it costs nothing |
+| Feeds | Discovery from `<link rel="alternate">` first, then conventional paths; RSS/RDF/Atom/JSON Feed normalized to one item shape with markdown content | A feed answers "what changed" far more cheaply than a crawl |
+| Retries | Only 429 and 503 are retried, with `Retry-After` honoured and a hard cap on the wait; browser renders are not retried | Those two codes mean "try later"; other failures mean something else |
+| Crawl-delay | Used only when the caller sets no `delay`, read from the start host's robots.txt, and it serializes the crawl | The site asked; an explicit caller choice still wins |
+| Office files | DOCX via mammoth to HTML then the normal markdown pipeline; XLSX via exceljs, first row as header | One markdown dialect for everything; spreadsheets rarely say where headers are, so the first row is the honest default |
 | Input bounds | 50 MB response cap, gzip output cap, 50 sitemap fetches per job, validated request bodies with clamped numbers | Hostile sites and bad clients should cost bounded memory and time |
 
 ## Not supported
@@ -45,5 +49,5 @@ webhooks, batch endpoints, OCR, and any format that needs a language model.
 - `search_local` ranks across all snapshots and then keeps one hit per URL, so an old snapshot can outrank the current one.
 - PDF extraction is text-layer only; scanned PDFs yield nothing.
 - DuckDuckGo's HTML endpoint rate-limits sustained use; use SearXNG or Brave for that.
-- A `delay` forces one worker; `Crawl-delay` in robots.txt is ignored.
+- A `delay` (explicit or from robots.txt `Crawl-delay`) forces one worker.
 - In-flight scrapes are not aborted on cancel; the job stops after they finish.

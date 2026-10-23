@@ -175,6 +175,22 @@ export const extractRequestSchema = z.object({
   scrapeOptions: scrapeOptionsSchema.optional(),
 });
 
+export const batchRequestSchema = z.object({
+  urls: z.array(z.string().min(1).max(8192)).min(1).max(1000),
+  concurrency: z.number().int().min(1).max(20).optional(),
+  ignoreInvalidURLs: z.boolean().optional(),
+  scrapeOptions: scrapeOptionsSchema.optional(),
+});
+
+export const feedRequestSchema = z.object({
+  url: z.string().min(1).max(8192),
+  limit: z.number().int().min(1).max(500).optional(),
+  since: z.union([z.string().max(40), z.number()]).optional(),
+  discover: z.boolean().optional(),
+  scrape: z.boolean().optional(),
+  scrapeOptions: scrapeOptionsSchema.optional(),
+});
+
 export const watchRequestSchema = z.object({
   url: z.string().min(1).max(8192),
   diff: z.boolean().optional(),

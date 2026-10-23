@@ -3,7 +3,9 @@ import { z } from "zod";
 import { closeBrowser } from "./browser.js";
 import { VERSION } from "./config.js";
 import { crawl, getCrawlStatus } from "./crawl.js";
+import { batchScrape, saveDocuments } from "./batch.js";
 import { extract } from "./extract.js";
+import { fetchFeed } from "./feed.js";
 import { map } from "./map.js";
 import { parseFile } from "./parse.js";
 import { crawlOptionShape, extractOptionShape, resolveScrapeOptions, scrapeOptionShape, scrapeOptionsSchema } from "./schemas.js";
@@ -95,13 +97,68 @@ export function createMcpServer(): McpServer {
     {
       title: "Crawl a site",
       description:
-        "Crawl a website starting at a URL, following links within scope, and return the scraped pages when the crawl finishes. Keep `limit` small; default is 100 pages.",
-      inputSchema: { url: z.string().min(1), ...mcpCrawlShape },
+        "Crawl a website starting at a URL, following links within scope, and return the scraped pages when the crawl finishes. Keep `limit` small; default is 100 pages. Pass `outDir` to also write every page as files under <outDir>/<host>/<path>/ (index.md and friends) and get the paths back instead of the full content.",
+      inputSchema: { url: z.string().min(1), outDir: z.string().min(1).max(4096).optional(), ...mcpCrawlShape },
     },
-    async ({ url, scrapeOptions, prompt: _prompt, ...options }) => {
+    async ({ url, outDir, scrapeOptions, prompt: _prompt, ...options }) => {
       try {
         const job = await crawl(url, { ...options, scrapeOptions: scrapeOptions ? resolveScrapeOptions(scrapeOptions) : undefined });
+        if (outDir) {
+          const { data, ...rest } = job;
+          const saved = await saveDocuments(data, outDir);
+          return json({ success: true, ...rest, outDir: saved.outDir, saved: saved.saved.map((s) => ({ url: s.url, dir: s.dir, files: s.files.length })), saveErrors: saved.errors });
+        }
         return json({ success: true, ...job });
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    `${prefix}batch_scrape`,
+    {
+      title: "Scrape many URLs",
+      description:
+        "Scrape a list of URLs in parallel and return the documents in input order, with per-URL errors listed separately. Same options as scrape. Pass `outDir` to write each page as files instead of returning content.",
+      inputSchema: {
+        urls: z.array(z.string().min(1)).min(1).max(1000),
+        concurrency: z.number().int().min(1).max(20).optional(),
+        outDir: z.string().min(1).max(4096).optional(),
+        ...scrapeOptionShape,
+      },
+    },
+    async ({ urls, concurrency, outDir, ...args }) => {
+      try {
+        const result = await batchScrape(urls, { concurrency, ignoreInvalidURLs: true, scrapeOptions: resolveScrapeOptions(args) });
+        if (outDir) {
+          const saved = await saveDocuments(result.data, outDir);
+          return json({ success: true, total: result.total, completed: result.completed, errors: result.errors, outDir: saved.outDir, saved: saved.saved.map((s) => ({ url: s.url, dir: s.dir, files: s.files.length })), saveErrors: saved.errors });
+        }
+        return json({ success: true, ...result });
+      } catch (err) {
+        return failure(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    `${prefix}feed`,
+    {
+      title: "Read a site's feed",
+      description:
+        "Fetch and parse an RSS, Atom, RSS 1.0 or JSON feed. Given an ordinary page URL, discovers the feed from its <link rel=\"alternate\"> tags or the usual paths (/feed, /rss.xml, /atom.xml, ...). Returns normalized items (title, url, published, author, summary, content as markdown). Set `scrape: true` to also fetch each item's page.",
+      inputSchema: {
+        url: z.string().min(1),
+        limit: z.number().int().min(1).max(500).optional(),
+        since: z.string().optional(),
+        scrape: z.boolean().optional(),
+        render: z.enum(["auto", "always", "never"]).optional(),
+      },
+    },
+    async ({ url, render, ...options }) => {
+      try {
+        return json({ success: true, data: await fetchFeed(url, { ...options, scrapeOptions: { render } }) });
       } catch (err) {
         return failure(err);
       }

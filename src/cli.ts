@@ -4,7 +4,9 @@ import { parseArgs } from "node:util";
 import { writeFile } from "node:fs/promises";
 import { VERSION } from "./config.js";
 import { activeBrowserChannel, closeBrowser, isBrowserAvailable } from "./browser.js";
+import { batchScrape, saveDocuments } from "./batch.js";
 import { crawl } from "./crawl.js";
+import { fetchFeed } from "./feed.js";
 import { extract } from "./extract.js";
 import type { SelectorSpec } from "./extract.js";
 import { startServer } from "./http.js";
@@ -24,8 +26,13 @@ Usage:
   opencrawl serve [--port 3002] [--host 127.0.0.1]
                                          Serve the v2-style HTTP API on http://127.0.0.1:3002
   opencrawl scrape <url> [-f markdown,links] [--only-main-content | --no-main-content] [--wait-for ms] [--render auto|always|never] [--max-age ms] [--json] [-o file]
+  opencrawl scrape <url> <url> ... [--concurrency n] [--out-dir dir]
+                                         Batch: several URLs in parallel; JSON to stdout or files under --out-dir
   opencrawl map <url> [--search q] [--limit n] [--sitemap include|skip|only] [--json] [-o file]
-  opencrawl crawl <url> [--limit n] [--max-depth n] [--include-paths a,b] [--exclude-paths a,b] [--entire-domain] [-o file]
+  opencrawl crawl <url> [--limit n] [--max-depth n] [--include-paths a,b] [--exclude-paths a,b] [--entire-domain] [-o file] [--out-dir dir]
+                                         --out-dir writes every page to <dir>/<host>/<path>/index.md (plus other formats)
+  opencrawl feed <url> [--limit n] [--since iso] [--scrape] [--json]
+                                         Parse an RSS/Atom/JSON feed, or discover one from a page
   opencrawl search <query> [--limit n] [--scrape] [--json] [-o file]
   opencrawl extract <url> [--select name=css[@attr][*]]... [--no-structured] [--no-tables] [--csv] [-o file]
                                          JSON-LD, microdata, Open Graph, meta, CSS selections and tables (no LLM)
@@ -33,7 +40,7 @@ Usage:
                                          Full-text search over everything already scraped (offline)
   opencrawl watch <url> [--no-diff] [--json]   Re-scrape and report new | same | changed (+diff) | removed
   opencrawl watch --list                 List watched URLs
-  opencrawl parse <file> [-f markdown,links] [--json] [-o file]
+  opencrawl parse <file> [-f markdown,links] [--json] [-o file]   PDF, DOCX, XLSX, HTML, text
   opencrawl doctor                      Check browser and search backend availability
 
 Environment:
@@ -108,14 +115,15 @@ async function main(argv: string[]): Promise<number> {
           render: { type: "string" },
           json: { type: "boolean" },
           output: { type: "string", short: "o" },
+          "out-dir": { type: "string" },
+          concurrency: { type: "string" },
           "include-tags": { type: "string" },
           "exclude-tags": { type: "string" },
         },
       });
-      const url = positionals[0];
-      if (!url) throw new Error("scrape needs a URL");
+      if (positionals.length === 0) throw new Error("scrape needs a URL");
       const formats = (list(values.format) ?? ["markdown"]) as FormatOption[];
-      const doc = await scrape(url, {
+      const scrapeOptions = {
         formats,
         onlyMainContent: values["no-main-content"] ? false : values["only-main-content"] ? true : undefined,
         waitFor: values["wait-for"] ? Number(values["wait-for"]) : undefined,
@@ -123,7 +131,20 @@ async function main(argv: string[]): Promise<number> {
         render: values.render as "auto" | "always" | "never" | undefined,
         includeTags: list(values["include-tags"]),
         excludeTags: list(values["exclude-tags"]),
-      });
+      };
+      if (positionals.length > 1 || values["out-dir"]) {
+        const result = await batchScrape(positionals, { scrapeOptions, ignoreInvalidURLs: true, concurrency: values.concurrency ? Number(values.concurrency) : undefined });
+        for (const e of result.errors) process.stderr.write(`error: ${e.url}: ${e.error}\n`);
+        if (values["out-dir"]) {
+          const saved = await saveDocuments(result.data, values["out-dir"]);
+          for (const s of saved.saved) process.stderr.write(`saved: ${s.dir} (${s.files.length} files)\n`);
+          process.stderr.write(`${saved.saved.length}/${result.total} pages written under ${saved.outDir}\n`);
+          return result.errors.length === result.total ? 1 : 0;
+        }
+        await emit(JSON.stringify({ success: true, ...result }, null, 2), values.output);
+        return result.errors.length === result.total ? 1 : 0;
+      }
+      const doc = await scrape(positionals[0]!, scrapeOptions);
       if (doc.warning) process.stderr.write(`warning: ${doc.warning}\n`);
       if (!values.json && formats.length === 1 && formats[0] === "markdown" && doc.markdown !== undefined) {
         await emit(doc.markdown, values.output);
@@ -171,6 +192,7 @@ async function main(argv: string[]): Promise<number> {
           sitemap: { type: "string" },
           format: { type: "string", short: "f" },
           output: { type: "string", short: "o" },
+          "out-dir": { type: "string" },
         },
       });
       const url = positionals[0];
@@ -186,6 +208,13 @@ async function main(argv: string[]): Promise<number> {
         scrapeOptions: values.format ? { formats: list(values.format) as FormatOption[] } : undefined,
       });
       process.stderr.write(`Crawled ${job.completed} page(s), status ${job.status}\n`);
+      if (values["out-dir"]) {
+        const saved = await saveDocuments(job.data, values["out-dir"]);
+        for (const s of saved.saved) process.stderr.write(`saved: ${s.dir} (${s.files.length} files)\n`);
+        for (const e of saved.errors) process.stderr.write(`error: ${e.url}: ${e.error}\n`);
+        process.stderr.write(`${saved.saved.length} page(s) written under ${saved.outDir}\n`);
+        return 0;
+      }
       await emit(JSON.stringify({ success: true, ...job }, null, 2), values.output);
       return 0;
     }
@@ -220,6 +249,29 @@ async function main(argv: string[]): Promise<number> {
           lines.push("");
         }
         await emit(lines.join("\n") || "No results found.", values.output);
+      }
+      return 0;
+    }
+    case "feed": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { limit: { type: "string" }, since: { type: "string" }, scrape: { type: "boolean" }, json: { type: "boolean" }, output: { type: "string", short: "o" }, render: { type: "string" } },
+      });
+      const url = positionals[0];
+      if (!url) throw new Error("feed needs a URL");
+      const feed = await fetchFeed(url, {
+        limit: values.limit ? Number(values.limit) : undefined,
+        since: values.since,
+        scrape: values.scrape,
+        scrapeOptions: { render: values.render as "auto" | "always" | "never" | undefined },
+      });
+      if (values.json || values.scrape) {
+        await emit(JSON.stringify({ success: true, data: feed }, null, 2), values.output);
+      } else {
+        const lines = [`${feed.title ?? "Untitled feed"} (${feed.type}) ${feed.url}`, ""];
+        for (const item of feed.items) lines.push(item.title ?? "Untitled", `  URL: ${item.url ?? "-"}`, `  Date: ${item.published ?? item.updated ?? "-"}`, item.summary ? `  ${item.summary.slice(0, 200)}` : "", "");
+        await emit(lines.join("\n"), values.output);
       }
       return 0;
     }

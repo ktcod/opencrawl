@@ -48,4 +48,13 @@ export const CRAWL_PAGE_SIZE = Number(process.env.OPENCRAWL_CRAWL_PAGE_SIZE ?? 2
 /** Finished crawl jobs are kept in the store this long. */
 export const JOB_RETENTION_MS = Number(process.env.OPENCRAWL_JOB_RETENTION_DAYS ?? 7) * 24 * 60 * 60 * 1000;
 
-export const VERSION = "0.3.0";
+/** Retries for HTTP 429/503 responses (after the first attempt). */
+export const DEFAULT_RETRIES = Number(process.env.OPENCRAWL_RETRIES ?? 2);
+
+/** Longest single wait between retries, even when Retry-After asks for more. */
+export const MAX_RETRY_WAIT_MS = Number(process.env.OPENCRAWL_MAX_RETRY_WAIT_MS ?? 30_000);
+
+/** Parallel pages for batch scrapes. */
+export const DEFAULT_BATCH_CONCURRENCY = Number(process.env.OPENCRAWL_BATCH_CONCURRENCY ?? 5);
+
+export const VERSION = "0.4.0";

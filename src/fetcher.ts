@@ -1,10 +1,12 @@
 import { Agent } from "undici";
-import { DEFAULT_TIMEOUT_MS, DESKTOP_USER_AGENT, MAX_RESPONSE_BYTES, MOBILE_USER_AGENT } from "./config.js";
+import { DEFAULT_RETRIES, DEFAULT_TIMEOUT_MS, DESKTOP_USER_AGENT, MAX_RESPONSE_BYTES, MAX_RETRY_WAIT_MS, MOBILE_USER_AGENT } from "./config.js";
 
 export interface FetchOptions {
   headers?: Record<string, string>;
   /** Abort once the body exceeds this many bytes. Defaults to MAX_RESPONSE_BYTES. */
   maxBytes?: number;
+  /** Retries on 429/503 (default DEFAULT_RETRIES). 0 disables. */
+  retries?: number;
   timeoutMs?: number;
   skipTlsVerification?: boolean;
   mobile?: boolean;
@@ -24,8 +26,32 @@ let insecureAgent: Agent | undefined;
 
 export type FetchFn = (url: string, options?: FetchOptions) => Promise<FetchedResource>;
 
-/** Plain HTTP fetch with a browser-like header set, a timeout and redirect following. */
+const RETRY_STATUSES = new Set([429, 503]);
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** How long to wait before retrying: Retry-After (seconds or HTTP date) when sane, else exponential backoff with jitter. */
+export function retryDelayMs(retryAfter: string | null, attempt: number, now: number = Date.now()): number {
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, MAX_RETRY_WAIT_MS);
+    const at = Date.parse(retryAfter);
+    if (!Number.isNaN(at)) return Math.min(Math.max(0, at - now), MAX_RETRY_WAIT_MS);
+  }
+  const base = 500 * 2 ** attempt;
+  return Math.min(base + Math.floor(Math.random() * base * 0.25), MAX_RETRY_WAIT_MS);
+}
+
+/** Plain HTTP fetch with a browser-like header set, a timeout, redirect following and 429/503 retries. */
 export const fetchResource: FetchFn = async (url, options = {}) => {
+  const retries = Math.max(0, options.retries ?? DEFAULT_RETRIES);
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetchOnce(url, options);
+    if (!RETRY_STATUSES.has(res.status) || attempt >= retries) return res;
+    await sleep(retryDelayMs(res.headers["retry-after"] ?? null, attempt));
+  }
+};
+
+async function fetchOnce(url: string, options: FetchOptions): Promise<FetchedResource> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
@@ -66,7 +92,7 @@ export const fetchResource: FetchFn = async (url, options = {}) => {
   } finally {
     clearTimeout(timer);
   }
-};
+}
 
 /** Read a response body into a Buffer, aborting once it exceeds `maxBytes`. */
 async function readBodyCapped(res: Response, maxBytes: number, url: string): Promise<Buffer> {

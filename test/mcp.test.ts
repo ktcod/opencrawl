@@ -25,9 +25,11 @@ describe("MCP server", () => {
   it("exposes the scrape, map, crawl, status, search and parse tools", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "batch_scrape",
       "check_crawl_status",
       "crawl",
       "extract",
+      "feed",
       "map",
       "parse",
       "scrape",
@@ -77,6 +79,13 @@ describe("MCP server", () => {
     );
     expect(result.openGraph["og:title"]).toBe("OG Title");
     expect(result.selected.products).toEqual([{ name: "Alpha" }, { name: "Beta" }]);
+  });
+
+  it("batch_scrape and feed work through MCP", async () => {
+    const batch = JSON.parse(textOf(await client.callTool({ name: "batch_scrape", arguments: { urls: [`${site.base}/docs/a`, `${site.base}/docs/b`], render: "never" } })));
+    expect(batch.completed).toBe(2);
+    const feed = JSON.parse(textOf(await client.callTool({ name: "feed", arguments: { url: `${site.base}/atom.xml` } })));
+    expect(feed.data.items[0].title).toBe("Atom Post 2");
   });
 
   it("reports tool errors with isError", async () => {

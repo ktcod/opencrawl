@@ -2,14 +2,16 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { extractPdf, isPdfBuffer } from "./pdf.js";
-import { documentFromHtml, normalizeFormats } from "./scrape.js";
+import { documentFromDocx, documentFromHtml, documentFromXlsx, normalizeFormats } from "./scrape.js";
 import type { Document as ScrapedDocument, ParseOptions } from "./types.js";
 
 const HTML_EXT = new Set([".html", ".htm", ".xhtml"]);
+const DOCX_EXT = new Set([".docx"]);
+const XLSX_EXT = new Set([".xlsx", ".xlsm"]);
 const TEXT_EXT = new Set([".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".xml", ".rst", ".log", ".yaml", ".yml", ".toml"]);
 
 /** File extensions parseFile accepts. Uploads with any other extension are rejected before being written. */
-export const PARSE_EXTENSIONS: ReadonlySet<string> = new Set([".pdf", ...HTML_EXT, ...TEXT_EXT]);
+export const PARSE_EXTENSIONS: ReadonlySet<string> = new Set([".pdf", ...HTML_EXT, ...TEXT_EXT, ...DOCX_EXT, ...XLSX_EXT]);
 
 function pdfMaxPages(options: ParseOptions): number | undefined {
   if (options.pdfOptions?.maxPages) return options.pdfOptions.maxPages;
@@ -43,6 +45,9 @@ export async function parseFile(filePath: string, options: ParseOptions = {}): P
     return doc;
   }
 
+  if (DOCX_EXT.has(ext)) return documentFromDocx(data, fileUrl, fileUrl, 200, options, nf, warnings);
+  if (XLSX_EXT.has(ext)) return documentFromXlsx(data, fileUrl, fileUrl, 200, nf, warnings);
+
   if (HTML_EXT.has(ext)) {
     return documentFromHtml(
       { html: data.toString("utf8"), status: 200, url: fileUrl, contentType: "text/html", rendered: false },
@@ -62,5 +67,5 @@ export async function parseFile(filePath: string, options: ParseOptions = {}): P
     return doc;
   }
 
-  throw new Error(`Unsupported file type "${ext || "(none)"}". opencrawl parses PDF, HTML and plain-text files.`);
+  throw new Error(`Unsupported file type "${ext || "(none)"}". opencrawl parses PDF, DOCX, XLSX, HTML and plain-text files.`);
 }

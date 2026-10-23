@@ -16,7 +16,7 @@ import type {
   ScrapeOptions,
 } from "./types.js";
 
-type Robots = { isAllowed(url: string, ua?: string): boolean | undefined };
+type Robots = { isAllowed(url: string, ua?: string): boolean | undefined; getCrawlDelay(ua?: string): number | undefined };
 type RobotsFn = (url: string, body: string) => Robots;
 // robots-parser ships a CommonJS function; under NodeNext the default import IS that function at runtime.
 const robotsParser = robotsParserImport as unknown as RobotsFn;
@@ -103,13 +103,16 @@ async function runCrawl(job: JobState, start: string, options: CrawlOptions, dep
   const startUrl = new URL(start);
   const limit = Math.max(1, options.limit ?? DEFAULT_CRAWL_LIMIT);
   const maxDepth = options.maxDiscoveryDepth ?? Number.POSITIVE_INFINITY;
-  const delayMs = Math.max(0, (options.delay ?? 0) * 1000);
-  // A per-request delay only means something when requests are serialized.
-  const concurrency = delayMs > 0 ? 1 : Math.min(MAX_CRAWL_CONCURRENCY, Math.max(1, options.maxConcurrency ?? DEFAULT_CRAWL_CONCURRENCY));
   const sitemapMode = options.sitemap ?? "include";
   const fetchFn = deps.fetch ?? fetchResource;
   const robotsFor = options.ignoreRobotsTxt ? null : robotsCache(fetchFn);
   const robotsUa = options.robotsUserAgent ?? ROBOTS_USER_AGENT;
+  // An explicit delay wins; otherwise honour the start host's robots.txt Crawl-delay.
+  const crawlDelay = robotsFor ? (await robotsFor(startUrl.origin))?.getCrawlDelay(robotsUa) : undefined;
+  const delaySeconds = options.delay ?? (typeof crawlDelay === "number" && crawlDelay > 0 ? crawlDelay : 0);
+  const delayMs = Math.max(0, delaySeconds * 1000);
+  // A per-request delay only means something when requests are serialized.
+  const concurrency = delayMs > 0 ? 1 : Math.min(MAX_CRAWL_CONCURRENCY, Math.max(1, options.maxConcurrency ?? DEFAULT_CRAWL_CONCURRENCY));
   let scope = buildScope(startUrl, options);
 
   // The crawler stores each page itself (after dropping the links it added for discovery).
